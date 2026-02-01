@@ -14,17 +14,15 @@ app.use(bodyParser.json());
 // --- CONFIGURAÇÃO DA GROQ ---
 const GROQ_API_URL = "https://api.groq.com/openai/v1"; 
 
-// --- FUNÇÃO 1: Enviar Mensagem no WhatsApp (COM CORREÇÃO DE 9 DÍGITOS) ---
+// --- ROTA "ESTOU VIVO" (PARA O RENDER NÃO DORMIR) ---
+// É aqui que o UptimeRobot vai "bater" a cada 5 minutos
+app.get("/", (req, res) => {
+  res.send("🤖 Bot Financeiro está acordado e pronto!");
+});
+
+// --- FUNÇÃO 1: Enviar Mensagem no WhatsApp ---
 async function enviarMensagem(to, text) {
   try {
-    // CORREÇÃO BRASIL: Se o número for brasileiro (55), tiver DDD e 8 dígitos (total 12), adiciona o 9.
-    // Ex: transforma 557582452296 em 5575982452296
-    if (to.length === 12 && to.startsWith("55")) {
-        console.log(`🔧 Corrigindo número: transformando ${to} (sem 9) para...`);
-        to = to.slice(0, 4) + "9" + to.slice(4);
-        console.log(`✨ ...${to} (com 9)`);
-    }
-
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
       {
@@ -34,11 +32,8 @@ async function enviarMensagem(to, text) {
       },
       { headers: { Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}` } }
     );
-    // Confirmação visual no terminal
-    console.log("✅ MENSAGEM ENVIADA COM SUCESSO PARA:", to); 
-
   } catch (error) {
-    console.error("❌ Erro ao enviar msg:", error.response?.data || error.message);
+    console.error("Erro ao enviar msg:", error.response?.data || error.message);
   }
 }
 
@@ -51,7 +46,10 @@ async function baixarAudio(mediaId) {
     );
     const mediaUrl = urlRes.data.url;
 
-    const writer = fs.createWriteStream("temp_audio.ogg");
+    // Nome temporário para o arquivo
+    const fileName = `temp_audio_${Date.now()}.ogg`;
+    const writer = fs.createWriteStream(fileName);
+    
     const response = await axios({
       url: mediaUrl,
       method: "GET",
@@ -60,9 +58,9 @@ async function baixarAudio(mediaId) {
     });
 
     await streamPipeline(response.data, writer);
-    return "temp_audio.ogg";
+    return fileName;
   } catch (error) {
-    console.error("❌ Erro baixar áudio:", error.response?.data || error.message);
+    console.error("Erro baixar áudio:", error.response?.data || error.message);
     return null;
   }
 }
@@ -72,11 +70,11 @@ async function transcreverAudio(filePath) {
   try {
     const formData = new FormData();
     formData.append("file", fs.createReadStream(filePath));
-    formData.append("model", "whisper-large-v3"); 
+    formData.append("model", "whisper-large-v3");
     formData.append("response_format", "json");
 
     const response = await axios.post(
-      `${GROQ_API_URL}/audio/transcriptions`, 
+      `${GROQ_API_URL}/audio/transcriptions`,
       formData,
       {
         headers: {
@@ -85,9 +83,15 @@ async function transcreverAudio(filePath) {
         },
       }
     );
+    
+    // Apagar arquivo temporário para não encher o servidor
+    fs.unlinkSync(filePath); 
+    
     return response.data.text;
   } catch (error) {
-    console.error("❌ Erro transcrição Groq:", error.response?.data || error.message);
+    console.error("Erro transcrição Groq:", error.response?.data || error.message);
+    // Tenta apagar mesmo se der erro
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     return "";
   }
 }
@@ -96,22 +100,19 @@ async function transcreverAudio(filePath) {
 async function interpretarGasto(texto) {
   try {
     const response = await axios.post(
-      `${GROQ_API_URL}/chat/completions`, 
+      `${GROQ_API_URL}/chat/completions`,
       {
         model: "llama-3.3-70b-versatile",
         messages: [
           {
             role: "system",
             content: `Você é um assistente financeiro pessoal.
-            Analise a mensagem e extraia os dados em JSON.
+            Analise a mensagem do usuário e extraia os dados em formato JSON.
             
-            Se for um gasto, retorne:
-            {"acao": "gasto", "valor": 10.50, "categoria": "Alimentação", "item": "Pizza"}
-            
-            Se não for gasto claro, retorne:
-            {"acao": "desconhecido"}
-            
-            Responda APENAS o JSON, sem markdown.`
+            Regras:
+            1. Se for um gasto, retorne: {"acao": "gasto", "valor": 0.00, "categoria": "Ex: Alimentação", "item": "Descrição curta"}
+            2. Se não for gasto claro, retorne: {"acao": "desconhecido"}
+            3. Responda ESTRITAMENTE o JSON, sem markdown, sem explicações.`
           },
           { role: "user", content: texto },
         ],
@@ -121,19 +122,23 @@ async function interpretarGasto(texto) {
     );
     
     let content = response.data.choices[0].message.content;
+    // Limpeza extra para garantir que o JSON venha limpo
     content = content.replace(/```json/g, "").replace(/```/g, "").trim();
+    
     return JSON.parse(content);
   } catch (error) {
-    console.error("❌ Erro Inteligência Groq:", error.response?.data || error.message);
+    console.error("Erro Inteligência Groq:", error.response?.data || error.message);
     return { acao: "erro" };
   }
 }
 
-// --- ROTA DO WEBHOOK (Verificação do Facebook) ---
+// --- ROTA DE VERIFICAÇÃO DO FACEBOOK (GET) ---
 app.get("/webhook", (req, res) => {
+  const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "financas123";
+
   if (
     req.query["hub.mode"] === "subscribe" &&
-    req.query["hub.verify_token"] === process.env.VERIFY_TOKEN
+    req.query["hub.verify_token"] === VERIFY_TOKEN
   ) {
     res.send(req.query["hub.challenge"]);
   } else {
@@ -141,50 +146,53 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-// --- ROTA DO WEBHOOK (Recebimento de Mensagens) ---
+// --- ROTA DE RECEBIMENTO DE MENSAGENS (POST) ---
 app.post("/webhook", async (req, res) => {
   const body = req.body;
 
   if (body.object) {
     const entry = body.entry?.[0]?.changes?.[0]?.value;
+    
+    // Verifica se tem mensagem e se não é status de entrega (sent/delivered/read)
     if (entry?.messages?.[0]) {
       const msg = entry.messages[0];
-      const from = msg.from; // O número de quem enviou
-
-      // --- LOG DE DIAGNÓSTICO ---
-      console.log("========================================");
-      console.log("📞 MENSAGEM RECEBIDA DE:", from);
-      // ---------------------------
-
+      const from = msg.from;
       let textoDoUsuario = "";
 
-      // 1. Processar Áudio ou Texto
-      if (msg.type === "audio") {
-        console.log("🎤 Áudio detectado...");
-        const arquivo = await baixarAudio(msg.audio.id);
-        if (arquivo) {
-          textoDoUsuario = await transcreverAudio(arquivo);
-          console.log("📝 Texto transcrito:", textoDoUsuario);
-        }
-      } else if (msg.type === "text") {
-        textoDoUsuario = msg.text.body;
-        console.log("📝 Texto recebido:", textoDoUsuario);
-      }
+      // Feedback visual rápido
+      // await enviarMensagem(from, "⏳ Processando...");
 
-      // 2. Inteligência Artificial e Resposta
-      if (textoDoUsuario) {
-        const dados = await interpretarGasto(textoDoUsuario);
-
-        if (dados.acao === "gasto") {
-          await enviarMensagem(
-            from,
-            `✅ *Registrado com Sucesso!*\n\n💰 Valor: R$${dados.valor}\n📂 Categoria: ${dados.categoria}\n🛒 Item: ${dados.item}`
-          );
-        } else if (dados.acao === "erro") {
-           await enviarMensagem(from, "Ocorreu um erro interno na IA.");
-        } else {
-          await enviarMensagem(from, "Não entendi o gasto. Tente falar: 'Gastei 20 reais no uber'");
+      try {
+        // 1. Processar Áudio ou Texto
+        if (msg.type === "audio") {
+          console.log("🎤 Áudio recebido...");
+          const arquivo = await baixarAudio(msg.audio.id);
+          if (arquivo) {
+            textoDoUsuario = await transcreverAudio(arquivo);
+            console.log("📝 Texto transcrito:", textoDoUsuario);
+          }
+        } else if (msg.type === "text") {
+          textoDoUsuario = msg.text.body;
+          console.log("📩 Texto recebido:", textoDoUsuario);
         }
+
+        // 2. Inteligência Artificial (Se tiver texto)
+        if (textoDoUsuario) {
+          const dados = await interpretarGasto(textoDoUsuario);
+
+          if (dados.acao === "gasto") {
+            await enviarMensagem(
+              from,
+              `✅ *Despesa Registrada!*\n\n💰 Valor: R$${dados.valor}\n📂 Categoria: ${dados.categoria}\n📝 Item: ${dados.item}`
+            );
+          } else if (dados.acao === "erro") {
+             await enviarMensagem(from, "Tive um erro interno ao processar. Tente novamente.");
+          } else {
+            await enviarMensagem(from, `Não entendi se isso foi um gasto.\n\nVocê disse: _"${textoDoUsuario}"_\n\nTente: "Gastei 15 reais no almoço"`);
+          }
+        }
+      } catch (err) {
+        console.error("Erro geral:", err);
       }
     }
     res.sendStatus(200);
@@ -193,6 +201,8 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT, () => {
-  console.log(`🚀 Servidor rodando com GROQ na porta ${process.env.PORT}`);
+// Porta dinâmica para o Render ou 3000 local
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor rodando na porta ${PORT}`);
 });
