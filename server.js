@@ -1,8 +1,9 @@
 const express = require('express');
 const axios = require('axios');
-const FormData = require('form-data'); // Necessário para enviar o áudio
+const FormData = require('form-data');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
+const { Readable } = require('stream'); // Nova importação importante
 const creds = require('./google.json'); 
 require('dotenv').config();
 
@@ -38,32 +39,40 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- 🎧 NOVO: FUNÇÃO PARA OUVIR (TRANSCRICÃO) ---
+// --- 🎧 FUNÇÃO DE OUVIDO (TRANSCRICÃO ROBUSTA) ---
 async function transcreverAudio(mediaId) {
     try {
-        console.log(`🎧 Baixando áudio ID: ${mediaId}...`);
+        console.log(`🎧 1. Iniciando download do áudio ID: ${mediaId}`);
         
-        // 1. Obter a URL do arquivo no WhatsApp
+        // 1. Pegar URL
         const urlResponse = await axios.get(
             `https://graph.facebook.com/v21.0/${mediaId}`,
             { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
         );
         const mediaUrl = urlResponse.data.url;
+        console.log(`🎧 2. URL obtida. Baixando binário...`);
 
-        // 2. Baixar o arquivo de áudio (Binary)
+        // 2. Baixar Arquivo
         const fileResponse = await axios.get(mediaUrl, {
             responseType: 'arraybuffer',
             headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` }
         });
         
         const buffer = Buffer.from(fileResponse.data);
+        console.log(`🎧 3. Download concluído. Tamanho: ${buffer.length} bytes`);
 
-        // 3. Enviar para a Groq (Whisper)
+        // 3. Converter para Stream (Mais seguro para upload)
+        const stream = Readable.from(buffer);
+        // Hack para o form-data reconhecer o path (necessário em alguns casos)
+        stream.path = 'audio.ogg'; 
+
+        // 4. Preparar envio para Groq
         const form = new FormData();
-        form.append('file', buffer, { filename: 'audio.ogg', contentType: 'audio/ogg' });
-        form.append('model', 'whisper-large-v3'); // Modelo de ouvido da Groq
+        form.append('file', stream, { filename: 'audio.ogg', contentType: 'audio/ogg' });
+        form.append('model', 'whisper-large-v3'); // Modelo Multilíngue
         form.append('response_format', 'json');
 
+        console.log(`🎧 4. Enviando para Groq Whisper...`);
         const groqResponse = await axios.post(
             'https://api.groq.com/openai/v1/audio/transcriptions',
             form,
@@ -71,26 +80,28 @@ async function transcreverAudio(mediaId) {
                 headers: {
                     ...form.getHeaders(),
                     'Authorization': `Bearer ${GROQ_API_KEY}`
-                }
+                },
+                maxBodyLength: Infinity,
+                maxContentLength: Infinity
             }
         );
 
-        console.log(`🗣️ Transcrição: "${groqResponse.data.text}"`);
+        console.log(`🗣️ Transcrição Sucesso: "${groqResponse.data.text}"`);
         return groqResponse.data.text;
 
     } catch (error) {
-        console.error("Erro na Transcrição:", error.message);
-        return null;
+        console.error("❌ Erro Detalhado no Áudio:", error.response ? error.response.data : error.message);
+        throw new Error(`Falha no áudio: ${error.message}`); // Lança erro para avisar o usuário
     }
 }
 
-// --- FUNÇÃO PARA PENSAR (GROQ LLAMA 3) ---
+// --- FUNÇÃO CÉREBRO (GROQ LLAMA 3.3) ---
 async function perguntarParaGroq(promptUsuario) {
     try {
         const response = await axios.post(
             'https://api.groq.com/openai/v1/chat/completions',
             {
-                model: "llama-3.3-70b-versatile", 
+                model: "llama-3.3-70b-versatile", // Modelo mais inteligente
                 messages: [
                     { role: "system", content: "Você é um assistente financeiro que SEMPRE responde apenas em JSON." },
                     { role: "user", content: promptUsuario }
@@ -159,7 +170,7 @@ async function lerUltimosGastos() {
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V6 (Texto + Áudio) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V6.1 (Áudio Debug) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -176,7 +187,6 @@ app.post('/webhook', async (req, res) => {
             const message = body.entry[0].changes[0].value.messages[0];
             const from = message.from;
             
-            // Verifica se é o dono
             if (from !== NUMERO_DONO) {
                 res.sendStatus(200);
                 return;
@@ -187,18 +197,23 @@ app.post('/webhook', async (req, res) => {
                 
                 let textoParaIA = null;
 
-                // 1. SE FOR TEXTO 📝
+                // 📝 TEXTO
                 if (message.type === 'text') {
                     textoParaIA = message.text.body;
                 } 
-                // 2. SE FOR ÁUDIO 🎤
+                // 🎤 ÁUDIO
                 else if (message.type === 'audio') {
-                    // Avisa que está ouvindo (opcional, mas bom pra UX)
+                    // Avisa que recebeu
                     // await sendMessage(from, "🎧 Ouvindo...");
-                    textoParaIA = await transcreverAudio(message.audio.id);
+                    try {
+                        textoParaIA = await transcreverAudio(message.audio.id);
+                    } catch (e) {
+                        await sendMessage(from, `❌ Erro no áudio: ${e.message}`);
+                        textoParaIA = null;
+                    }
                 }
 
-                // Se temos texto (digitado ou transcrito), processamos!
+                // PROCESSAR (Se tiver texto válido)
                 if (textoParaIA) {
                     const prompt = `
                     Atue como contador.
@@ -220,7 +235,7 @@ app.post('/webhook', async (req, res) => {
                     let respostaFinal = "";
 
                     if (!ia) {
-                        respostaFinal = "Não entendi o áudio/texto. Pode repetir?"; 
+                        respostaFinal = "Não entendi. Tente falar mais devagar ou digite."; 
                     } else if (ia.acao === "REGISTRAR") {
                         const salvou = await adicionarNaPlanilha(ia.dados);
                         if (salvou) respostaFinal = `✅ *Anotado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}`;
@@ -268,4 +283,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V6 (Áudio ON) na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V6.1 rodando na porta ${PORT}`));
