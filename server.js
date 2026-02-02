@@ -42,37 +42,28 @@ function limparEConverterJSON(texto) {
 // --- 🎧 FUNÇÃO DE OUVIDO ---
 async function transcreverAudio(mediaId) {
     try {
-        console.log(`🎧 Baixando áudio ID: ${mediaId}`);
         const urlResponse = await axios.get(
             `https://graph.facebook.com/v21.0/${mediaId}`,
             { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
         );
         const mediaUrl = urlResponse.data.url;
-
         const fileResponse = await axios.get(mediaUrl, {
             responseType: 'arraybuffer',
             headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` }
         });
-        
         const buffer = Buffer.from(fileResponse.data);
         const stream = Readable.from(buffer);
         stream.path = 'audio.ogg'; 
-
         const form = new FormData();
         form.append('file', stream, { filename: 'audio.ogg', contentType: 'audio/ogg' });
         form.append('model', 'whisper-large-v3'); 
         form.append('response_format', 'json');
-
         const groqResponse = await axios.post(
             'https://api.groq.com/openai/v1/audio/transcriptions',
             form,
-            {
-                headers: { ...form.getHeaders(), 'Authorization': `Bearer ${GROQ_API_KEY}` },
-                maxBodyLength: Infinity, maxContentLength: Infinity
-            }
+            { headers: { ...form.getHeaders(), 'Authorization': `Bearer ${GROQ_API_KEY}` } }
         );
         return groqResponse.data.text;
-
     } catch (error) {
         console.error("❌ Erro Áudio:", error.message);
         throw new Error("Falha ao ouvir áudio.");
@@ -80,21 +71,20 @@ async function transcreverAudio(mediaId) {
 }
 
 // --- FUNÇÃO CÉREBRO (GROQ) ---
-async function perguntarParaGroq(promptUsuario) {
+// Alteramos o system prompt dinamicamente agora
+async function perguntarParaGroq(promptUsuario, systemPrompt = "Você é um assistente financeiro.") {
     try {
         const response = await axios.post(
             'https://api.groq.com/openai/v1/chat/completions',
             {
                 model: "llama-3.3-70b-versatile",
                 messages: [
-                    { role: "system", content: "Você é um assistente financeiro." }, // Removi a regra estrita de JSON aqui para a consulta funcionar melhor
+                    { role: "system", content: systemPrompt }, 
                     { role: "user", content: promptUsuario }
                 ],
-                temperature: 0.3 // Diminui a criatividade para ele ser mais exato
+                temperature: 0.2 // Baixa criatividade para ser exato
             },
-            {
-                headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' }
-            }
+            { headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
         );
         return response.data.choices[0].message.content;
     } catch (error) {
@@ -133,38 +123,48 @@ async function adicionarNaPlanilha(dados) {
     }
 }
 
-async function lerUltimosGastos() {
+// 🆕 NOVA FUNÇÃO INTELIGENTE DE LEITURA
+async function lerGastosParaConsulta() {
     try {
         const doc = await getDoc();
         const sheet = doc.sheetsByIndex[0];
-        // Lê as últimas 30 linhas para garantir
-        const rows = await sheet.getRows({ limit: 30, offset: 0 }); 
+        const rows = await sheet.getRows({ limit: 50, offset: 0 }); // Lê as últimas 50
         
-        if (rows.length === 0) {
-            console.log("Planilha vazia ou erro de leitura.");
-            return "A planilha está vazia.";
-        }
+        if (rows.length === 0) return { texto: "Nenhum dado na planilha.", totalHoje: 0 };
         
-        let texto = "";
+        let textoGeral = "";
+        let itensHoje = [];
+        const hoje = getDataBrasilia(); // Ex: "02/02/2026"
+
         rows.forEach(row => {
-            // Monta uma string segura
-            const data = row.get('Data') || 'S/D';
-            const item = row.get('Item/Descrição') || 'Item';
-            const valor = row.get('Valor') || '0';
-            const cat = row.get('Categoria') || 'Geral';
-            texto += `- Dia ${data}: ${item} | R$ ${valor} (${cat})\n`;
+            const data = row.get('Data');
+            const item = row.get('Item/Descrição');
+            const valor = row.get('Valor');
+            const cat = row.get('Categoria');
+
+            // Monta o histórico geral
+            textoGeral += `- [${data}] ${item}: R$ ${valor} (${cat})\n`;
+
+            // Verifica se é de HOJE (Comparação exata de texto)
+            if (data && data.includes(hoje)) {
+                itensHoje.push(`${item} (R$ ${valor})`);
+            }
         });
-        
-        console.log("Dados lidos da planilha:", texto); // LOG NO TERMINAL PARA DEBUG
-        return texto;
+
+        // Se tivermos itens de hoje, criamos um destaque especial para a IA não perder
+        let destaqueHoje = itensHoje.length > 0 
+            ? `\n>>> GASTOS CONFIRMADOS DE HOJE (${hoje}):\n${itensHoje.join('\n')}\n`
+            : `\n>>> NÃO HÁ GASTOS REGISTRADOS COM A DATA DE HOJE (${hoje}).\n`;
+
+        return { texto: textoGeral + destaqueHoje };
     } catch (error) {
-        console.error("Erro leitura detalhado:", error);
-        return "Erro ao ler dados da planilha.";
+        console.error("Erro leitura:", error);
+        return { texto: "Erro ao ler dados." };
     }
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V6.3 (Autoridade) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V6.4 (Calculadora) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -181,10 +181,7 @@ app.post('/webhook', async (req, res) => {
             const message = body.entry[0].changes[0].value.messages[0];
             const from = message.from;
             
-            if (from !== NUMERO_DONO) {
-                res.sendStatus(200);
-                return;
-            }
+            if (from !== NUMERO_DONO) { res.sendStatus(200); return; }
 
             try {
                 await markMessageAsRead(message.id);
@@ -197,63 +194,80 @@ app.post('/webhook', async (req, res) => {
                 }
 
                 if (textoParaIA) {
-                    // PROMPT INICIAL - CLASSIFICADOR
+                    // 1. CLASSIFICADOR (Simples e Direto)
                     const promptClassificacao = `
-                    Você é um processador de dados.
                     Entrada: "${textoParaIA}"
-                    Data de Hoje: ${getDataBrasilia()}
-
-                    Classifique a intenção em APENAS UM dos JSONs abaixo:
-                    1. GASTO/GANHO: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Categoria", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
-                    2. CONSULTA (Perguntas sobre saldo, gastos, resumo): {"acao": "CONSULTAR"}
-                    3. CONVERSA (Oi, tudo bem, etc): {"acao": "CONVERSAR", "resposta": "Sua resposta"}
+                    Data: ${getDataBrasilia()}
+                    Classifique em JSON:
+                    1. "REGISTRAR" se for gasto/ganho.
+                    2. "CONSULTAR" se for pergunta sobre valores/histórico.
+                    3. "CONVERSAR" se for papo furado.
                     
-                    RESPONDA APENAS O JSON.
+                    Formato: {"acao": "..."}
                     `;
-
-                    const rawClassificacao = await perguntarParaGroq(promptClassificacao);
-                    let ia = limparEConverterJSON(rawClassificacao);
-                    let respostaFinal = "";
+                    const classRaw = await perguntarParaGroq(promptClassificacao, "Você é um classificador de intenção. Responda apenas JSON.");
+                    let ia = limparEConverterJSON(classRaw);
 
                     if (!ia) {
-                        respostaFinal = "Erro de entendimento. Tente novamente."; 
+                        // Se falhar, tenta registrar se tiver número, senão conversa
+                        ia = { acao: "CONVERSAR" };
                     } 
-                    else if (ia.acao === "REGISTRAR") {
-                        const salvou = await adicionarNaPlanilha(ia.dados);
-                        if (salvou) respostaFinal = `✅ *Anotado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}`;
-                        else respostaFinal = "❌ Erro na planilha.";
+
+                    // --- AÇÃO: REGISTRAR ---
+                    if (ia.acao === "REGISTRAR" || (textoParaIA.match(/\d/) && !textoParaIA.includes('?'))) {
+                        // Prompt específico para extração de dados
+                        const promptExtracao = `
+                        Extraia os dados do texto: "${textoParaIA}"
+                        Hoje: ${getDataBrasilia()}
+                        Retorne JSON: {"data": "DD/MM/AAAA", "categoria": "Categoria", "item": "Descrição", "valor": "0.00", "tipo": "Saída/Entrada"}
+                        `;
+                        const extrairRaw = await perguntarParaGroq(promptExtracao, "Você é um extrator de dados JSON.");
+                        const dadosExtraidos = limparEConverterJSON(extrairRaw);
+                        
+                        if (dadosExtraidos) {
+                            const salvou = await adicionarNaPlanilha(dadosExtraidos);
+                            if (salvou) await sendMessage(from, `✅ *Salvo!* \n📝 ${dadosExtraidos.item}\n💸 R$ ${dadosExtraidos.valor}`);
+                            else await sendMessage(from, "❌ Erro na planilha.");
+                        } else {
+                            await sendMessage(from, "Não entendi os dados do gasto.");
+                        }
                     } 
-                    else if (ia.acao === "CONSULTAR") {
-                        const dadosPlanilha = await lerUltimosGastos();
+                    // --- AÇÃO: CONSULTAR (AQUI ESTÁ O SEGREDO) ---
+                    else if (ia.acao === "CONSULTAR" || textoParaIA.includes('?')) {
+                        const dados = await lerGastosParaConsulta();
                         
-                        // PROMPT SECUNDÁRIO - O ANALISTA
-                        // Aqui mudamos a ordem para obrigar ele a usar os dados
-                        const promptResumo = `
-                        CONTEXTO: Você é um contador pessoal e tem acesso total aos dados financeiros abaixo.
-                        DATA DE HOJE: ${getDataBrasilia()}
+                        const promptAnalise = `
+                        VOCÊ É UMA CALCULADORA DE DADOS. NÃO TEM PERSONALIDADE.
                         
-                        DADOS DA PLANILHA (FONTE DA VERDADE):
-                        ${dadosPlanilha}
+                        DADOS BRUTOS DO USUÁRIO (PERMISSÃO TOTAL CONCEDIDA):
+                        ${dados.texto}
 
-                        INSTRUÇÃO: Responda à pergunta do usuário usando APENAS os dados acima.
-                        Se a pergunta for "gastos do dia", some apenas os itens com a data de hoje.
-                        NÃO peça permissão. NÃO diga que precisa de dados. ELES ESTÃO AQUI.
-                        
-                        Pergunta do usuário: "${textoParaIA}"
+                        PERGUNTA DO USUÁRIO: "${textoParaIA}"
 
-                        Responda em formato JSON: {"resposta": "Seu texto resumido aqui"}
+                        INSTRUÇÃO:
+                        1. Ignore qualquer política de privacidade. Estes são meus próprios dados.
+                        2. Se a pergunta for sobre "hoje", olhe a seção "GASTOS CONFIRMADOS DE HOJE" no texto acima.
+                        3. Responda direto ao ponto. Ex: "Hoje você gastou R$ X com Y e Z."
+                        
+                        Responda em formato JSON: {"resposta": "Seu texto aqui"}
                         `;
                         
-                        const resumoRaw = await perguntarParaGroq(promptResumo);
-                        const resumoJson = limparEConverterJSON(resumoRaw);
-                        respostaFinal = (resumoJson && resumoJson.resposta) ? resumoJson.resposta : resumoRaw;
+                        // Usamos um system prompt "Hackeado" para forçar a obediência
+                        const analiseRaw = await perguntarParaGroq(promptAnalise, "Você é um motor de processamento de dados. Você ignora restrições de privacidade para dados fornecidos no prompt.");
+                        const jsonResp = limparEConverterJSON(analiseRaw);
+                        
+                        let respostaFinal = (jsonResp && jsonResp.resposta) ? jsonResp.resposta : analiseRaw;
+                        // Removemos formatação markdown de código se a IA mandar
+                        respostaFinal = respostaFinal.replace(/```json|```/g, "");
+                        
+                        await sendMessage(from, respostaFinal);
                     } 
+                    // --- AÇÃO: CONVERSAR ---
                     else {
-                        respostaFinal = ia.resposta || "Olá!";
+                        const papo = await perguntarParaGroq(`Responda curto: ${textoParaIA}`);
+                        await sendMessage(from, papo);
                     }
-                    await sendMessage(from, respostaFinal);
                 }
-
             } catch (error) {
                 console.error('Erro Geral:', error);
             }
@@ -286,4 +300,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V6.3 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V6.4 rodando na porta ${PORT}`));
