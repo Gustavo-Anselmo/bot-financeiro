@@ -42,6 +42,20 @@ function limparEConverterJSON(texto) {
     }
 }
 
+// --- 🤖 MANUAL DE AJUDA (SEM NOME) ---
+function getMenuAjuda() {
+    return `🤖 *Olá! Sou sua Inteligência Artificial Financeira.*
+
+✅ *O QUE EU FAÇO:*
+1. 📝 *Registrar:* Mande áudio ou texto (ex: "Gastei 50 no mercado").
+2. 👮‍♂️ *Metas:* Te aviso se estourar o limite da categoria.
+3. 📅 *Fixos:* Digite *"Lançar fixos"* para registrar as contas do mês.
+4. 🔎 *Consultas:* Pergunte "Quanto gastei hoje?" ou "Resumo do mês".
+5. 🧠 *Organização:* Categorizo tudo automaticamente.
+
+_Versão 9.3 - Sistema Online_ ⚡`;
+}
+
 // --- 🎧 AUDIO ---
 async function transcreverAudio(mediaId) {
     try {
@@ -81,7 +95,8 @@ async function perguntarParaGroq(promptUsuario) {
             {
                 model: "llama-3.3-70b-versatile",
                 messages: [
-                    { role: "system", content: "Você é um assistente financeiro." },
+                    // Voltou a ser um assistente genérico
+                    { role: "system", content: "Você é um assistente financeiro inteligente e prestativo." },
                     { role: "user", content: promptUsuario }
                 ],
                 temperature: 0.3 
@@ -113,58 +128,44 @@ async function getSheetParaUsuario(numeroUsuario) {
     return sheet;
 }
 
-// Leitura das Categorias (Para classificar certo)
 async function getCategoriasPermitidas() {
     try {
         const doc = await getDoc();
         const sheetMetas = doc.sheetsByTitle['Metas'];
         if (!sheetMetas) return "Alimentação, Transporte, Lazer, Casa, Contas, Outros";
-        
         const rows = await sheetMetas.getRows();
         const categorias = rows.map(row => row.get('Categoria')).filter(c => c);
         return categorias.length > 0 ? categorias.join(', ') : "Alimentação, Transporte, Lazer, Casa, Contas, Outros";
     } catch (e) { return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; }
 }
 
-// 👁️ NOVA FUNÇÃO: LER TUDO (FIXOS + METAS) PARA CONSULTA
 async function lerDadosCompletos(numeroUsuario) {
     try {
         const doc = await getDoc();
         let relatorio = "";
 
-        // 1. Ler Gastos Recentes (Extrato)
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const rowsUser = await sheetUser.getRows({ limit: 30, offset: 0 });
-        relatorio += "📊 --- SEU EXTRATO RECENTE ---\n";
+        relatorio += "📊 --- EXTRATO RECENTE ---\n";
         if (rowsUser.length > 0) {
             rowsUser.forEach(row => {
                 relatorio += `- ${row.get('Data')}: ${row.get('Item/Descrição')} | R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
             });
-        } else {
-            relatorio += "(Sem gastos recentes)\n";
-        }
+        } else { relatorio += "(Sem gastos recentes)\n"; }
 
-        // 2. Ler Configuração de Fixos
         const sheetFixos = doc.sheetsByTitle['Fixos'];
-        relatorio += "\n📌 --- SEUS GASTOS FIXOS CADASTRADOS ---\n";
+        relatorio += "\n📌 --- GASTOS FIXOS CADASTRADOS ---\n";
         if (sheetFixos) {
             const rowsFixos = await sheetFixos.getRows();
-            if (rowsFixos.length > 0) {
-                rowsFixos.forEach(row => {
-                    relatorio += `- ${row.get('Item')}: R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
-                });
-            } else { relatorio += "(Lista de fixos vazia)\n"; }
-        } else { relatorio += "(Aba 'Fixos' não existe)\n"; }
+            rowsFixos.forEach(row => {
+                relatorio += `- ${row.get('Item')}: R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
+            });
+        }
 
         return relatorio;
-
-    } catch (e) {
-        console.error("Erro leitura total:", e);
-        return "Erro ao ler planilhas.";
-    }
+    } catch (e) { return "Erro ao ler planilhas."; }
 }
 
-// Função para lançar os fixos na planilha do usuário (Execução)
 async function lancarGastosFixos(numeroUsuario) {
     try {
         const doc = await getDoc();
@@ -229,7 +230,7 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V9.1 (Visão Total) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V9.3 (Correção de Nome) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -257,25 +258,34 @@ app.post('/webhook', async (req, res) => {
                 }
 
                 if (textoParaIA) {
-                    // COMANDO MÁGICO
-                    if (textoParaIA.toLowerCase().includes('lancar fixos') || textoParaIA.toLowerCase().includes('lançar fixos')) {
+                    const txt = textoParaIA.toLowerCase();
+
+                    // 1. MENU AJUDA
+                    if (txt.includes('o que você faz') || txt.includes('ajuda') || txt.includes('menu') || txt.includes('funções') || txt.includes('funcões')) {
+                        await sendMessage(from, getMenuAjuda());
+                        res.sendStatus(200);
+                        return;
+                    }
+
+                    // 2. LANÇAR FIXOS
+                    if (txt.includes('lancar fixos') || txt.includes('lançar fixos')) {
                         const relatorio = await lancarGastosFixos(from);
                         await sendMessage(from, relatorio);
                         res.sendStatus(200);
                         return;
                     }
 
+                    // 3. FLUXO NORMAL IA
                     const categoriasPermitidas = await getCategoriasPermitidas();
 
                     const promptClassificacao = `
                     Entrada: "${textoParaIA}"
                     Data: ${getDataBrasilia()}
-                    
-                    ⚠️ REGRA: Categorias permitidas: [${categoriasPermitidas}].
+                    Categorias permitidas: [${categoriasPermitidas}].
 
                     Classifique em UM dos JSONs:
                     1. GASTO/GANHO: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Uma das permitidas", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
-                    2. CONSULTA (Perguntas, dúvidas, ver fixos): {"acao": "CONSULTAR"}
+                    2. CONSULTA: {"acao": "CONSULTAR"}
                     3. CONVERSA: {"acao": "CONVERSAR", "resposta": "Sua resposta"}
                     
                     RESPONDA APENAS O JSON.
@@ -298,23 +308,13 @@ app.post('/webhook', async (req, res) => {
                         }
                     } 
                     else if (ia.acao === "CONSULTAR") {
-                        // 👇 AQUI A CORREÇÃO: LÊ TUDO (FIXOS + EXTRATO) ANTES DE RESPONDER
                         const dadosCompletos = await lerDadosCompletos(from);
-                        
                         const promptResumo = `
-                        CONTEXTO: Contador pessoal.
+                        CONTEXTO: Você é um assistente financeiro.
                         DATA: ${getDataBrasilia()}
-                        
-                        DADOS FINANCEIROS COMPLETOS (Extrato + Configurações de Fixos):
-                        ${dadosCompletos}
-
-                        ⚠️ INSTRUÇÃO CRÍTICA:
-                        Use os dados acima para responder. VOCÊ TEM PERMISSÃO TOTAL PARA LER.
-                        Se o usuário perguntar "quais são meus fixos", LEIA a seção "SEUS GASTOS FIXOS CADASTRADOS" acima e liste eles.
-                        NÃO DIGA QUE A PLANILHA ESTÁ VAZIA SE HOUVER DADOS EM "GASTOS FIXOS".
-
+                        DADOS: ${dadosCompletos}
                         PERGUNTA: "${textoParaIA}"
-                        ESTILO: WhatsApp (Emojis, Negrito, Lista).
+                        ESTILO: WhatsApp (Emojis, Negrito).
                         JSON RESPOSTA: {"resposta": "Texto"}
                         `;
                         const resumoRaw = await perguntarParaGroq(promptResumo);
@@ -355,4 +355,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V9.1 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V9.3 rodando na porta ${PORT}`));
