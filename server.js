@@ -40,13 +40,14 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- FUNÇÃO PARA CHAMAR A GROQ (Substitui o Gemini) ---
+// --- FUNÇÃO PARA CHAMAR A GROQ ---
 async function perguntarParaGroq(promptUsuario) {
     try {
         const response = await axios.post(
             'https://api.groq.com/openai/v1/chat/completions',
             {
-                model: "llama3-8b-8192", // Modelo rápido e inteligente da Meta
+                // 👇 AQUI ESTÁ A MUDANÇA:
+                model: "llama-3.3-70b-versatile", 
                 messages: [
                     { role: "system", content: "Você é um assistente financeiro que SEMPRE responde apenas em JSON." },
                     { role: "user", content: promptUsuario }
@@ -55,7 +56,7 @@ async function perguntarParaGroq(promptUsuario) {
             },
             {
                 headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`,
+                    'Authorization': `Bearer ${GROQ_API_KEY}`, // Usa a chave que já está no Render
                     'Content-Type': 'application/json'
                 }
             }
