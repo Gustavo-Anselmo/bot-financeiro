@@ -16,8 +16,8 @@ const MY_TOKEN = process.env.MY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const GROQ_API_KEY = process.env.GROQ_API_KEY; 
-const NUMERO_DONO = process.env.NUMERO_DONO; 
 const SHEET_ID = process.env.SHEET_ID; 
+// Nota: Removemos a restrição de NUMERO_DONO para permitir outros users
 
 // --- UTILITÁRIOS ---
 function getDataBrasilia() {
@@ -103,7 +103,7 @@ async function perguntarParaGroq(promptUsuario) {
     }
 }
 
-// --- PLANILHA ---
+// --- GERENCIADOR DE PLANILHAS (FAMÍLIA) 👨‍👩‍👧 ---
 async function getDoc() {
     const serviceAccountAuth = new JWT({
         email: creds.client_email,
@@ -115,10 +115,24 @@ async function getDoc() {
     return doc;
 }
 
-async function adicionarNaPlanilha(dados) {
+// Encontra ou cria uma aba para o usuário
+async function getSheetParaUsuario(numeroUsuario) {
+    const doc = await getDoc();
+    
+    // Tenta achar uma aba com o número da pessoa
+    let sheet = doc.sheetsByTitle[numeroUsuario];
+    
+    // Se não existir, cria uma nova aba para ela
+    if (!sheet) {
+        console.log(`Criando nova aba para: ${numeroUsuario}`);
+        sheet = await doc.addSheet({ title: numeroUsuario, headerValues: ['Data', 'Categoria', 'Item/Descrição', 'Valor', 'Tipo'] });
+    }
+    return sheet;
+}
+
+async function adicionarNaPlanilha(dados, numeroUsuario) {
     try {
-        const doc = await getDoc();
-        const sheet = doc.sheetsByIndex[0]; 
+        const sheet = await getSheetParaUsuario(numeroUsuario);
         await sheet.addRow({
             'Data': dados.data,
             'Categoria': dados.categoria,
@@ -133,10 +147,9 @@ async function adicionarNaPlanilha(dados) {
     }
 }
 
-async function lerUltimosGastos() {
+async function lerUltimosGastos(numeroUsuario) {
     try {
-        const doc = await getDoc();
-        const sheet = doc.sheetsByIndex[0];
+        const sheet = await getSheetParaUsuario(numeroUsuario);
         const rows = await sheet.getRows({ limit: 30, offset: 0 }); 
         
         if (rows.length === 0) return "A planilha está vazia.";
@@ -157,7 +170,7 @@ async function lerUltimosGastos() {
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V6.4 (Design) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V7.0 (Família) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -172,12 +185,11 @@ app.post('/webhook', async (req, res) => {
     if (body.object) {
         if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
             const message = body.entry[0].changes[0].value.messages[0];
-            const from = message.from;
+            const from = message.from; // Número de quem enviou (Sua mãe, você, etc.)
+            const nomeUsuario = message.from; // Usaremos o número como "Nome" da aba
             
-            if (from !== NUMERO_DONO) {
-                res.sendStatus(200);
-                return;
-            }
+            // REMOVI A TRAVA DE SEGURANÇA QUE SÓ ACEITAVA SEU NÚMERO
+            // Agora qualquer pessoa na lista de teste do Meta pode usar
 
             try {
                 await markMessageAsRead(message.id);
@@ -192,7 +204,6 @@ app.post('/webhook', async (req, res) => {
                 if (textoParaIA) {
                     // 1. CLASSIFICAR
                     const promptClassificacao = `
-                    Você é um processador de dados.
                     Entrada: "${textoParaIA}"
                     Data: ${getDataBrasilia()}
 
@@ -212,35 +223,27 @@ app.post('/webhook', async (req, res) => {
                         respostaFinal = "Erro de entendimento."; 
                     } 
                     else if (ia.acao === "REGISTRAR") {
-                        const salvou = await adicionarNaPlanilha(ia.dados);
+                        // Passamos o 'from' (número) para saber em qual aba salvar
+                        const salvou = await adicionarNaPlanilha(ia.dados, from);
                         if (salvou) respostaFinal = `✅ *Anotado!* \n📝 *${ia.dados.item}*\n💸 R$ ${ia.dados.valor}`;
                         else respostaFinal = "❌ Erro na planilha.";
                     } 
                     else if (ia.acao === "CONSULTAR") {
-                        const dadosPlanilha = await lerUltimosGastos();
+                        // Lê apenas a aba desse número específico
+                        const dadosPlanilha = await lerUltimosGastos(from);
                         
-                        // 👇 AQUI ESTÁ O NOVO DESIGN 👇
                         const promptResumo = `
-                        CONTEXTO: Você é um contador pessoal.
-                        DATA DE HOJE: ${getDataBrasilia()}
-                        
-                        DADOS DA PLANILHA:
+                        CONTEXTO: Contador pessoal.
+                        DATA: ${getDataBrasilia()}
+                        DADOS DE QUEM PERGUNTOU (${from}):
                         ${dadosPlanilha}
 
                         INSTRUÇÃO: Responda à pergunta "${textoParaIA}" usando APENAS os dados acima.
                         
-                        ESTILO OBRIGATÓRIO (WHATSAPP):
-                        - Use emojis (📊, 💰, 🍔).
-                        - Use *negrito* nos valores e nomes dos itens.
-                        - Liste cada gasto em uma nova linha com um marcador (▪️).
-                        - Pule uma linha antes do total.
-                        - Exemplo visual desejado:
-                          📊 *Resumo de Hoje (02/02):*
-                          
-                          ▪️ *Lanche*: R$ 20,00 (Alimentação)
-                          ▪️ *Uber*: R$ 15,00 (Transporte)
-                          
-                          💰 *Total:* *R$ 35,00*
+                        ESTILO WHATSAPP:
+                        - Use emojis.
+                        - *Negrito* nos valores.
+                        - Lista com marcadores.
 
                         Responda em formato JSON: {"resposta": "Seu texto formatado aqui"}
                         `;
@@ -287,4 +290,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V6.4 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V7.0 rodando na porta ${PORT}`));
