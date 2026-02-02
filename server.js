@@ -17,11 +17,14 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const GROQ_API_KEY = process.env.GROQ_API_KEY; 
 const SHEET_ID = process.env.SHEET_ID; 
-// Nota: Removemos a restrição de NUMERO_DONO para permitir outros users
 
 // --- UTILITÁRIOS ---
 function getDataBrasilia() {
     return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+}
+
+function getMesAnoAtual() {
+    return getDataBrasilia().substring(3); // Ex: "02/2026"
 }
 
 function limparEConverterJSON(texto) {
@@ -39,23 +42,18 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- 🎧 FUNÇÃO DE OUVIDO ---
+// --- 🎧 AUDIO (WHISPER) ---
 async function transcreverAudio(mediaId) {
     try {
-        console.log(`🎧 Baixando áudio ID: ${mediaId}`);
         const urlResponse = await axios.get(
             `https://graph.facebook.com/v21.0/${mediaId}`,
             { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
         );
-        const mediaUrl = urlResponse.data.url;
-
-        const fileResponse = await axios.get(mediaUrl, {
+        const fileResponse = await axios.get(urlResponse.data.url, {
             responseType: 'arraybuffer',
             headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` }
         });
-        
-        const buffer = Buffer.from(fileResponse.data);
-        const stream = Readable.from(buffer);
+        const stream = Readable.from(Buffer.from(fileResponse.data));
         stream.path = 'audio.ogg'; 
 
         const form = new FormData();
@@ -66,20 +64,16 @@ async function transcreverAudio(mediaId) {
         const groqResponse = await axios.post(
             'https://api.groq.com/openai/v1/audio/transcriptions',
             form,
-            {
-                headers: { ...form.getHeaders(), 'Authorization': `Bearer ${GROQ_API_KEY}` },
-                maxBodyLength: Infinity, maxContentLength: Infinity
-            }
+            { headers: { ...form.getHeaders(), 'Authorization': `Bearer ${GROQ_API_KEY}` } }
         );
         return groqResponse.data.text;
-
     } catch (error) {
-        console.error("❌ Erro Áudio:", error.message);
+        console.error("Erro Áudio:", error.message);
         throw new Error("Falha ao ouvir áudio.");
     }
 }
 
-// --- FUNÇÃO CÉREBRO (GROQ) ---
+// --- CÉREBRO (GROQ) ---
 async function perguntarParaGroq(promptUsuario) {
     try {
         const response = await axios.post(
@@ -92,18 +86,13 @@ async function perguntarParaGroq(promptUsuario) {
                 ],
                 temperature: 0.3 
             },
-            {
-                headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' }
-            }
+            { headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } }
         );
         return response.data.choices[0].message.content;
-    } catch (error) {
-        console.error("Erro Groq:", error.message);
-        return null;
-    }
+    } catch (error) { return null; }
 }
 
-// --- GERENCIADOR DE PLANILHAS (FAMÍLIA) 👨‍👩‍👧 ---
+// --- PLANILHA & LOGICA ---
 async function getDoc() {
     const serviceAccountAuth = new JWT({
         email: creds.client_email,
@@ -115,19 +104,104 @@ async function getDoc() {
     return doc;
 }
 
-// Encontra ou cria uma aba para o usuário
 async function getSheetParaUsuario(numeroUsuario) {
     const doc = await getDoc();
-    
-    // Tenta achar uma aba com o número da pessoa
     let sheet = doc.sheetsByTitle[numeroUsuario];
-    
-    // Se não existir, cria uma nova aba para ela
     if (!sheet) {
-        console.log(`Criando nova aba para: ${numeroUsuario}`);
         sheet = await doc.addSheet({ title: numeroUsuario, headerValues: ['Data', 'Categoria', 'Item/Descrição', 'Valor', 'Tipo'] });
     }
     return sheet;
+}
+
+// 🎯 1. PADRONIZAÇÃO: Pega as categorias da aba "Metas"
+async function getCategoriasPermitidas() {
+    try {
+        const doc = await getDoc();
+        const sheetMetas = doc.sheetsByTitle['Metas'];
+        if (!sheetMetas) return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; // Padrão se não achar
+        
+        const rows = await sheetMetas.getRows();
+        const categorias = rows.map(row => row.get('Categoria')).filter(c => c); // Pega lista limpa
+        
+        return categorias.length > 0 ? categorias.join(', ') : "Alimentação, Transporte, Lazer, Casa, Contas, Outros";
+    } catch (e) {
+        return "Alimentação, Transporte, Lazer, Casa, Contas, Outros";
+    }
+}
+
+// 📅 3. GASTOS FIXOS: Lança tudo da aba "Fixos"
+async function lancarGastosFixos(numeroUsuario) {
+    try {
+        const doc = await getDoc();
+        const sheetFixos = doc.sheetsByTitle['Fixos'];
+        if (!sheetFixos) return "⚠️ Não encontrei a aba 'Fixos'. Crie ela com as colunas: Item, Valor, Categoria.";
+
+        const rowsFixos = await sheetFixos.getRows();
+        if (rowsFixos.length === 0) return "⚠️ A aba 'Fixos' está vazia.";
+
+        const sheetUser = await getSheetParaUsuario(numeroUsuario);
+        const dataHoje = getDataBrasilia();
+        let total = 0;
+        let resumo = "";
+
+        for (const row of rowsFixos) {
+            const item = row.get('Item');
+            const valor = row.get('Valor');
+            const cat = row.get('Categoria');
+
+            await sheetUser.addRow({
+                'Data': dataHoje,
+                'Categoria': cat,
+                'Item/Descrição': item,
+                'Valor': valor,
+                'Tipo': 'Saída'
+            });
+            total += parseFloat(valor.replace(',', '.'));
+            resumo += `▪️ ${item}: R$ ${valor}\n`;
+        }
+        return `✅ *Contas Fixas Lançadas!*\n\n${resumo}\n💰 *Total:* R$ ${total.toFixed(2)}`;
+    } catch (e) {
+        console.error("Erro Fixos:", e);
+        return "❌ Erro ao lançar fixos.";
+    }
+}
+
+// 👮‍♂️ ALERTA DE META
+async function verificarMeta(categoria, valorNovo, numeroUsuario) {
+    try {
+        const doc = await getDoc();
+        const sheetMetas = doc.sheetsByTitle['Metas'];
+        if (!sheetMetas) return "";
+
+        const metasRows = await sheetMetas.getRows();
+        // Normaliza para comparar (Tudo minúsculo)
+        const metaRow = metasRows.find(row => row.get('Categoria').toLowerCase().trim() === categoria.toLowerCase().trim());
+        
+        if (!metaRow) return ""; 
+
+        const limite = parseFloat(metaRow.get('Limite').replace('R$', '').replace(',', '.'));
+        const sheetUser = await getSheetParaUsuario(numeroUsuario);
+        const gastosRows = await sheetUser.getRows();
+        const mesAtual = getMesAnoAtual();
+
+        let totalGastoMes = 0;
+        gastosRows.forEach(row => {
+            const dataRow = row.get('Data'); 
+            const catRow = row.get('Categoria');
+            const valorRow = parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
+
+            if (dataRow.includes(mesAtual) && catRow.toLowerCase().trim() === categoria.toLowerCase().trim()) {
+                totalGastoMes += valorRow;
+            }
+        });
+
+        const totalFinal = totalGastoMes + parseFloat(valorNovo);
+        
+        if (totalFinal > limite) {
+            return `\n\n🚨 *ALERTA:* Meta de ${categoria} estourada em R$ ${(totalFinal - limite).toFixed(2)}!`;
+        }
+        return "";
+    } catch (e) { return ""; }
 }
 
 async function adicionarNaPlanilha(dados, numeroUsuario) {
@@ -141,36 +215,25 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
             'Tipo': dados.tipo
         });
         return true;
-    } catch (error) {
-        console.error('Erro Planilha:', error);
-        return false;
-    }
+    } catch (error) { return false; }
 }
 
 async function lerUltimosGastos(numeroUsuario) {
     try {
         const sheet = await getSheetParaUsuario(numeroUsuario);
         const rows = await sheet.getRows({ limit: 30, offset: 0 }); 
-        
         if (rows.length === 0) return "A planilha está vazia.";
         
         let texto = "";
         rows.forEach(row => {
-            const data = row.get('Data') || 'S/D';
-            const item = row.get('Item/Descrição') || 'Item';
-            const valor = row.get('Valor') || '0';
-            const cat = row.get('Categoria') || 'Geral';
-            texto += `- Dia ${data}: ${item} | R$ ${valor} (${cat})\n`;
+            texto += `- ${row.get('Data')}: ${row.get('Item/Descrição')} | R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
         });
         return texto;
-    } catch (error) {
-        console.error("Erro leitura:", error);
-        return "Erro ao ler dados da planilha.";
-    }
+    } catch (error) { return "Erro ao ler dados."; }
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V7.0 (Família) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V9.0 (Admin) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -185,11 +248,7 @@ app.post('/webhook', async (req, res) => {
     if (body.object) {
         if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
             const message = body.entry[0].changes[0].value.messages[0];
-            const from = message.from; // Número de quem enviou (Sua mãe, você, etc.)
-            const nomeUsuario = message.from; // Usaremos o número como "Nome" da aba
-            
-            // REMOVI A TRAVA DE SEGURANÇA QUE SÓ ACEITAVA SEU NÚMERO
-            // Agora qualquer pessoa na lista de teste do Meta pode usar
+            const from = message.from; 
 
             try {
                 await markMessageAsRead(message.id);
@@ -202,13 +261,25 @@ app.post('/webhook', async (req, res) => {
                 }
 
                 if (textoParaIA) {
-                    // 1. CLASSIFICAR
+                    // 🚀 DETECTOR DE COMANDO MÁGICO "FIXOS"
+                    if (textoParaIA.toLowerCase().includes('lancar fixos') || textoParaIA.toLowerCase().includes('lançar fixos') || textoParaIA.toLowerCase().includes('contas fixas')) {
+                        const relatorio = await lancarGastosFixos(from);
+                        await sendMessage(from, relatorio);
+                        res.sendStatus(200);
+                        return;
+                    }
+
+                    // Se não for comando mágico, segue o fluxo normal com IA
+                    const categoriasPermitidas = await getCategoriasPermitidas();
+
                     const promptClassificacao = `
                     Entrada: "${textoParaIA}"
                     Data: ${getDataBrasilia()}
+                    
+                    ⚠️ REGRA DE OURO: Para a categoria, você DEVE escolher APENAS uma destas opções: [${categoriasPermitidas}]. Não invente nada novo.
 
                     Classifique em UM dos JSONs:
-                    1. GASTO/GANHO: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Categoria", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
+                    1. GASTO/GANHO: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Uma das opções acima", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
                     2. CONSULTA: {"acao": "CONSULTAR"}
                     3. CONVERSA: {"acao": "CONVERSAR", "resposta": "Sua resposta"}
                     
@@ -220,34 +291,27 @@ app.post('/webhook', async (req, res) => {
                     let respostaFinal = "";
 
                     if (!ia) {
-                        respostaFinal = "Erro de entendimento."; 
+                        respostaFinal = "Não entendi."; 
                     } 
                     else if (ia.acao === "REGISTRAR") {
-                        // Passamos o 'from' (número) para saber em qual aba salvar
                         const salvou = await adicionarNaPlanilha(ia.dados, from);
-                        if (salvou) respostaFinal = `✅ *Anotado!* \n📝 *${ia.dados.item}*\n💸 R$ ${ia.dados.valor}`;
-                        else respostaFinal = "❌ Erro na planilha.";
+                        if (salvou) {
+                            const alerta = await verificarMeta(ia.dados.categoria, ia.dados.valor, from);
+                            respostaFinal = `✅ *Anotado!* \n📝 *${ia.dados.item}*\n💸 R$ ${ia.dados.valor} (${ia.dados.categoria})${alerta}`;
+                        } else {
+                            respostaFinal = "❌ Erro na planilha.";
+                        }
                     } 
                     else if (ia.acao === "CONSULTAR") {
-                        // Lê apenas a aba desse número específico
                         const dadosPlanilha = await lerUltimosGastos(from);
-                        
                         const promptResumo = `
                         CONTEXTO: Contador pessoal.
                         DATA: ${getDataBrasilia()}
-                        DADOS DE QUEM PERGUNTOU (${from}):
-                        ${dadosPlanilha}
-
-                        INSTRUÇÃO: Responda à pergunta "${textoParaIA}" usando APENAS os dados acima.
-                        
-                        ESTILO WHATSAPP:
-                        - Use emojis.
-                        - *Negrito* nos valores.
-                        - Lista com marcadores.
-
-                        Responda em formato JSON: {"resposta": "Seu texto formatado aqui"}
+                        DADOS: ${dadosPlanilha}
+                        PERGUNTA: "${textoParaIA}"
+                        ESTILO: WhatsApp (Emojis, Negrito, Lista).
+                        JSON RESPOSTA: {"resposta": "Texto"}
                         `;
-                        
                         const resumoRaw = await perguntarParaGroq(promptResumo);
                         const resumoJson = limparEConverterJSON(resumoRaw);
                         respostaFinal = (resumoJson && resumoJson.resposta) ? resumoJson.resposta : resumoRaw;
@@ -290,4 +354,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V7.0 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V9.0 rodando na porta ${PORT}`));
