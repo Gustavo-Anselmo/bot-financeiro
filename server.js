@@ -3,7 +3,7 @@ const axios = require('axios');
 const FormData = require('form-data');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
-const { Readable } = require('stream'); // Nova importação importante
+const { Readable } = require('stream'); 
 const creds = require('./google.json'); 
 require('dotenv').config();
 
@@ -39,85 +39,67 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- 🎧 FUNÇÃO DE OUVIDO (TRANSCRICÃO ROBUSTA) ---
+// --- 🎧 FUNÇÃO DE OUVIDO ---
 async function transcreverAudio(mediaId) {
     try {
-        console.log(`🎧 1. Iniciando download do áudio ID: ${mediaId}`);
-        
-        // 1. Pegar URL
+        console.log(`🎧 Baixando áudio ID: ${mediaId}`);
         const urlResponse = await axios.get(
             `https://graph.facebook.com/v21.0/${mediaId}`,
             { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
         );
         const mediaUrl = urlResponse.data.url;
-        console.log(`🎧 2. URL obtida. Baixando binário...`);
 
-        // 2. Baixar Arquivo
         const fileResponse = await axios.get(mediaUrl, {
             responseType: 'arraybuffer',
             headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` }
         });
         
         const buffer = Buffer.from(fileResponse.data);
-        console.log(`🎧 3. Download concluído. Tamanho: ${buffer.length} bytes`);
-
-        // 3. Converter para Stream (Mais seguro para upload)
         const stream = Readable.from(buffer);
-        // Hack para o form-data reconhecer o path (necessário em alguns casos)
         stream.path = 'audio.ogg'; 
 
-        // 4. Preparar envio para Groq
         const form = new FormData();
         form.append('file', stream, { filename: 'audio.ogg', contentType: 'audio/ogg' });
-        form.append('model', 'whisper-large-v3'); // Modelo Multilíngue
+        form.append('model', 'whisper-large-v3'); 
         form.append('response_format', 'json');
 
-        console.log(`🎧 4. Enviando para Groq Whisper...`);
         const groqResponse = await axios.post(
             'https://api.groq.com/openai/v1/audio/transcriptions',
             form,
             {
-                headers: {
-                    ...form.getHeaders(),
-                    'Authorization': `Bearer ${GROQ_API_KEY}`
-                },
-                maxBodyLength: Infinity,
-                maxContentLength: Infinity
+                headers: { ...form.getHeaders(), 'Authorization': `Bearer ${GROQ_API_KEY}` },
+                maxBodyLength: Infinity, maxContentLength: Infinity
             }
         );
-
-        console.log(`🗣️ Transcrição Sucesso: "${groqResponse.data.text}"`);
         return groqResponse.data.text;
 
     } catch (error) {
-        console.error("❌ Erro Detalhado no Áudio:", error.response ? error.response.data : error.message);
-        throw new Error(`Falha no áudio: ${error.message}`); // Lança erro para avisar o usuário
+        console.error("❌ Erro Áudio:", error.message);
+        throw new Error("Falha ao ouvir áudio.");
     }
 }
 
-// --- FUNÇÃO CÉREBRO (GROQ LLAMA 3.3) ---
+// --- FUNÇÃO CÉREBRO (GROQ) ---
 async function perguntarParaGroq(promptUsuario) {
     try {
         const response = await axios.post(
             'https://api.groq.com/openai/v1/chat/completions',
             {
-                model: "llama-3.3-70b-versatile", // Modelo mais inteligente
+                model: "llama-3.3-70b-versatile",
                 messages: [
-                    { role: "system", content: "Você é um assistente financeiro que SEMPRE responde apenas em JSON." },
+                    // Mantemos a regra de JSON, mas agora somos mais específicos no prompt do usuário
+                    { role: "system", content: "Você é um assistente financeiro. Responda SEMPRE em JSON." },
                     { role: "user", content: promptUsuario }
                 ],
                 temperature: 0.5
             },
             {
-                headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`,
-                    'Content-Type': 'application/json'
-                }
+                headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' }
             }
         );
         return response.data.choices[0].message.content;
     } catch (error) {
-        console.error("Erro na Groq Llama:", error.message);
+        console.error("Erro Groq:", error.message);
         return null;
     }
 }
@@ -156,21 +138,21 @@ async function lerUltimosGastos() {
     try {
         const doc = await getDoc();
         const sheet = doc.sheetsByIndex[0];
-        const rows = await sheet.getRows({ limit: 15, offset: 0 }); 
+        const rows = await sheet.getRows({ limit: 20, offset: 0 }); 
         if (rows.length === 0) return "A planilha está vazia.";
         
-        let texto = "📊 *Extrato Recente:*\n";
+        let texto = "";
         rows.forEach(row => {
-            texto += `- ${row.get('Data')}: ${row.get('Item/Descrição')} | R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
+            texto += `- ${row.get('Data')}: ${row.get('Item/Descrição')} (R$ ${row.get('Valor')})\n`;
         });
         return texto;
     } catch (error) {
-        return "Erro ao ler planilha.";
+        return "Erro ao ler dados.";
     }
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V6.1 (Áudio Debug) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V6.2 (Orador) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -196,38 +178,24 @@ app.post('/webhook', async (req, res) => {
                 await markMessageAsRead(message.id);
                 
                 let textoParaIA = null;
-
-                // 📝 TEXTO
-                if (message.type === 'text') {
-                    textoParaIA = message.text.body;
-                } 
-                // 🎤 ÁUDIO
+                if (message.type === 'text') textoParaIA = message.text.body;
                 else if (message.type === 'audio') {
-                    // Avisa que recebeu
-                    // await sendMessage(from, "🎧 Ouvindo...");
-                    try {
-                        textoParaIA = await transcreverAudio(message.audio.id);
-                    } catch (e) {
-                        await sendMessage(from, `❌ Erro no áudio: ${e.message}`);
-                        textoParaIA = null;
-                    }
+                    try { textoParaIA = await transcreverAudio(message.audio.id); } 
+                    catch (e) { await sendMessage(from, "❌ Erro no áudio."); }
                 }
 
-                // PROCESSAR (Se tiver texto válido)
                 if (textoParaIA) {
                     const prompt = `
-                    Atue como contador.
-                    Msg do Usuário: "${textoParaIA}"
+                    Atue como contador pessoal.
+                    Mensagem do Usuário: "${textoParaIA}"
                     Hoje: ${getDataBrasilia()}
 
-                    CATEGORIAS: Alimentação, Transporte, Lazer, Casa, Contas, Saúde, Investimento, Outros.
-
                     REGRAS:
-                    1. GASTO/GANHO -> JSON: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Escolha", "item": "Resumo", "valor": "0.00", "tipo": "Saída ou Entrada"}}
-                    2. CONSULTA -> JSON: {"acao": "CONSULTAR"}
-                    3. PAPO -> JSON: {"acao": "CONVERSAR", "resposta": "Sua resposta curta"}
+                    1. GASTO/GANHO -> JSON: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Categoria", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
+                    2. CONSULTA (Ex: quanto gastei?) -> JSON: {"acao": "CONSULTAR"}
+                    3. CONVERSA -> JSON: {"acao": "CONVERSAR", "resposta": "Sua resposta textual"}
                     
-                    RESPONDA APENAS O JSON PURO.
+                    RESPONDA APENAS O JSON.
                     `;
 
                     const rawText = await perguntarParaGroq(prompt);
@@ -235,18 +203,34 @@ app.post('/webhook', async (req, res) => {
                     let respostaFinal = "";
 
                     if (!ia) {
-                        respostaFinal = "Não entendi. Tente falar mais devagar ou digite."; 
-                    } else if (ia.acao === "REGISTRAR") {
+                        respostaFinal = "Não entendi. Pode repetir?"; 
+                    } 
+                    else if (ia.acao === "REGISTRAR") {
                         const salvou = await adicionarNaPlanilha(ia.dados);
-                        if (salvou) respostaFinal = `✅ *Anotado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}`;
+                        if (salvou) respostaFinal = `✅ *Anotado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}`;
                         else respostaFinal = "❌ Erro na planilha.";
-                    } else if (ia.acao === "CONSULTAR") {
+                    } 
+                    else if (ia.acao === "CONSULTAR") {
+                        // 👇 AQUI ESTÁ A CORREÇÃO MÁGICA 👇
                         const dadosPlanilha = await lerUltimosGastos();
-                        const resumo = await perguntarParaGroq(`Responda "${textoParaIA}" com base em:\n${dadosPlanilha}`);
-                        const jsonResumo = limparEConverterJSON(resumo);
-                        respostaFinal = jsonResumo && jsonResumo.resposta ? jsonResumo.resposta : resumo;
-                    } else {
-                        respostaFinal = ia.resposta || "Oi!";
+                        
+                        const promptResumo = `
+                        Analise os dados abaixo e responda a pergunta: "${textoParaIA}".
+                        DADOS DA PLANILHA:
+                        ${dadosPlanilha}
+
+                        IMPORTANTE: Retorne a resposta em JSON no formato:
+                        {"resposta": "Seu texto explicativo aqui"}
+                        `;
+                        
+                        const resumoRaw = await perguntarParaGroq(promptResumo);
+                        const resumoJson = limparEConverterJSON(resumoRaw);
+                        
+                        // Se conseguiu ler o JSON, manda só o texto. Se não, manda o bruto.
+                        respostaFinal = (resumoJson && resumoJson.resposta) ? resumoJson.resposta : "Não consegui analisar os dados.";
+                    } 
+                    else {
+                        respostaFinal = ia.resposta || "Olá!";
                     }
                     await sendMessage(from, respostaFinal);
                 }
@@ -283,4 +267,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V6.1 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V6.2 rodando na porta ${PORT}`));
