@@ -1,6 +1,6 @@
 const express = require('express');
 const axios = require('axios');
-// Removemos a linha do GoogleGenerativeAI pois vamos usar Groq via Axios
+const FormData = require('form-data'); // Necessário para enviar o áudio
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const creds = require('./google.json'); 
@@ -14,13 +14,11 @@ const PORT = process.env.PORT || 3000;
 const MY_TOKEN = process.env.MY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-// Usando a chave que você já tem no Render
 const GROQ_API_KEY = process.env.GROQ_API_KEY; 
 const NUMERO_DONO = process.env.NUMERO_DONO; 
 const SHEET_ID = process.env.SHEET_ID; 
 
 // --- UTILITÁRIOS ---
-
 function getDataBrasilia() {
     return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 }
@@ -40,13 +38,58 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- FUNÇÃO PARA CHAMAR A GROQ ---
+// --- 🎧 NOVO: FUNÇÃO PARA OUVIR (TRANSCRICÃO) ---
+async function transcreverAudio(mediaId) {
+    try {
+        console.log(`🎧 Baixando áudio ID: ${mediaId}...`);
+        
+        // 1. Obter a URL do arquivo no WhatsApp
+        const urlResponse = await axios.get(
+            `https://graph.facebook.com/v21.0/${mediaId}`,
+            { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
+        );
+        const mediaUrl = urlResponse.data.url;
+
+        // 2. Baixar o arquivo de áudio (Binary)
+        const fileResponse = await axios.get(mediaUrl, {
+            responseType: 'arraybuffer',
+            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` }
+        });
+        
+        const buffer = Buffer.from(fileResponse.data);
+
+        // 3. Enviar para a Groq (Whisper)
+        const form = new FormData();
+        form.append('file', buffer, { filename: 'audio.ogg', contentType: 'audio/ogg' });
+        form.append('model', 'whisper-large-v3'); // Modelo de ouvido da Groq
+        form.append('response_format', 'json');
+
+        const groqResponse = await axios.post(
+            'https://api.groq.com/openai/v1/audio/transcriptions',
+            form,
+            {
+                headers: {
+                    ...form.getHeaders(),
+                    'Authorization': `Bearer ${GROQ_API_KEY}`
+                }
+            }
+        );
+
+        console.log(`🗣️ Transcrição: "${groqResponse.data.text}"`);
+        return groqResponse.data.text;
+
+    } catch (error) {
+        console.error("Erro na Transcrição:", error.message);
+        return null;
+    }
+}
+
+// --- FUNÇÃO PARA PENSAR (GROQ LLAMA 3) ---
 async function perguntarParaGroq(promptUsuario) {
     try {
         const response = await axios.post(
             'https://api.groq.com/openai/v1/chat/completions',
             {
-                // 👇 AQUI ESTÁ A MUDANÇA:
                 model: "llama-3.3-70b-versatile", 
                 messages: [
                     { role: "system", content: "Você é um assistente financeiro que SEMPRE responde apenas em JSON." },
@@ -56,14 +99,14 @@ async function perguntarParaGroq(promptUsuario) {
             },
             {
                 headers: {
-                    'Authorization': `Bearer ${GROQ_API_KEY}`, // Usa a chave que já está no Render
+                    'Authorization': `Bearer ${GROQ_API_KEY}`,
                     'Content-Type': 'application/json'
                 }
             }
         );
         return response.data.choices[0].message.content;
     } catch (error) {
-        console.error("Erro na Groq:", error.response ? error.response.data : error.message);
+        console.error("Erro na Groq Llama:", error.message);
         return null;
     }
 }
@@ -116,7 +159,7 @@ async function lerUltimosGastos() {
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot (Versão Groq/Llama) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V6 (Texto + Áudio) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -132,21 +175,34 @@ app.post('/webhook', async (req, res) => {
         if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
             const message = body.entry[0].changes[0].value.messages[0];
             const from = message.from;
-            const msgBody = message.text ? message.text.body : null;
-
+            
+            // Verifica se é o dono
             if (from !== NUMERO_DONO) {
-                console.log(`Bloqueado: ${from}`);
                 res.sendStatus(200);
                 return;
             }
 
-            if (msgBody) {
-                try {
-                    await markMessageAsRead(message.id);
+            try {
+                await markMessageAsRead(message.id);
+                
+                let textoParaIA = null;
 
+                // 1. SE FOR TEXTO 📝
+                if (message.type === 'text') {
+                    textoParaIA = message.text.body;
+                } 
+                // 2. SE FOR ÁUDIO 🎤
+                else if (message.type === 'audio') {
+                    // Avisa que está ouvindo (opcional, mas bom pra UX)
+                    // await sendMessage(from, "🎧 Ouvindo...");
+                    textoParaIA = await transcreverAudio(message.audio.id);
+                }
+
+                // Se temos texto (digitado ou transcrito), processamos!
+                if (textoParaIA) {
                     const prompt = `
                     Atue como contador.
-                    Msg: "${msgBody}"
+                    Msg do Usuário: "${textoParaIA}"
                     Hoje: ${getDataBrasilia()}
 
                     CATEGORIAS: Alimentação, Transporte, Lazer, Casa, Contas, Saúde, Investimento, Outros.
@@ -159,31 +215,29 @@ app.post('/webhook', async (req, res) => {
                     RESPONDA APENAS O JSON PURO.
                     `;
 
-                    // Chamando a nova função do Groq
                     const rawText = await perguntarParaGroq(prompt);
                     let ia = limparEConverterJSON(rawText);
                     let respostaFinal = "";
 
                     if (!ia) {
-                        respostaFinal = "Tive um erro de conexão com o cérebro (Groq). Tente de novo."; 
+                        respostaFinal = "Não entendi o áudio/texto. Pode repetir?"; 
                     } else if (ia.acao === "REGISTRAR") {
                         const salvou = await adicionarNaPlanilha(ia.dados);
                         if (salvou) respostaFinal = `✅ *Anotado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}`;
                         else respostaFinal = "❌ Erro na planilha.";
                     } else if (ia.acao === "CONSULTAR") {
                         const dadosPlanilha = await lerUltimosGastos();
-                        // Pergunta secundária para a Groq resumir os dados
-                        const resumo = await perguntarParaGroq(`Analise estes dados e responda a pergunta "${msgBody}":\n${dadosPlanilha}`);
-                        // Se a Groq retornar JSON no resumo (às vezes acontece), tentamos pegar o texto, senão usamos o raw
+                        const resumo = await perguntarParaGroq(`Responda "${textoParaIA}" com base em:\n${dadosPlanilha}`);
                         const jsonResumo = limparEConverterJSON(resumo);
                         respostaFinal = jsonResumo && jsonResumo.resposta ? jsonResumo.resposta : resumo;
                     } else {
                         respostaFinal = ia.resposta || "Oi!";
                     }
                     await sendMessage(from, respostaFinal);
-                } catch (error) {
-                    console.error('Erro Geral:', error);
                 }
+
+            } catch (error) {
+                console.error('Erro Geral:', error);
             }
         }
         res.sendStatus(200);
@@ -214,4 +268,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor Groq rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V6 (Áudio ON) na porta ${PORT}`));
