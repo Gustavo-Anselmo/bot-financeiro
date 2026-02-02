@@ -9,19 +9,26 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// --- CONFIGURAÇÕES ---
+// --- CONFIGURAÇÃO ---
 const PORT = process.env.PORT || 3000;
 const MY_TOKEN = process.env.MY_TOKEN;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Agora vai funcionar!
 const NUMERO_DONO = process.env.NUMERO_DONO; 
 const SHEET_ID = process.env.SHEET_ID; 
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-// --- FAXINEIRA DE JSON ---
+// --- UTILITÁRIOS ---
+
+// 1. Forçar Data/Hora Brasil 📅
+function getDataBrasilia() {
+    return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+}
+
+// 2. Faxineira de JSON 🧹
 function limparEConverterJSON(texto) {
     try {
         let limpo = texto.replace(/```json|```/g, "").trim();
@@ -32,7 +39,7 @@ function limparEConverterJSON(texto) {
         }
         return JSON.parse(limpo);
     } catch (e) {
-        console.error("Erro ao limpar JSON:", e);
+        console.error("Erro JSON:", e);
         return null;
     }
 }
@@ -62,7 +69,7 @@ async function adicionarNaPlanilha(dados) {
         });
         return true;
     } catch (error) {
-        console.error('Erro ao salvar:', error);
+        console.error('Erro ao Salvar:', error);
         return false;
     }
 }
@@ -71,24 +78,23 @@ async function lerUltimosGastos() {
     try {
         const doc = await getDoc();
         const sheet = doc.sheetsByIndex[0];
-        const rows = await sheet.getRows({ limit: 20, offset: 0 });
+        const rows = await sheet.getRows({ limit: 15, offset: 0 }); 
         if (rows.length === 0) return "A planilha está vazia.";
-        let texto = "Histórico Recente:\n";
+        
+        let texto = "📊 *Atividade Recente:*\n";
         rows.forEach(row => {
-            texto += `- ${row.get('Data')}: ${row.get('Item/Descrição')} (R$ ${row.get('Valor')})\n`;
+            texto += `- ${row.get('Data')}: ${row.get('Item/Descrição')} | R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
         });
         return texto;
     } catch (error) {
-        return "Erro ao ler dados.";
+        return "Erro ao ler a planilha.";
     }
 }
 
 // --- ROTAS ---
 
-// 🆕 ROTA DA PORTA DA FRENTE (Para o UptimeRobot não dar erro 404)
-app.get('/', (req, res) => {
-  res.send('🤖 Bot Financeiro está ONLINE e operante!');
-});
+// 🆕 PORTA DA FRENTE (Mantém o UptimeRobot feliz e o bot acordado)
+app.get('/', (req, res) => res.send('🤖 Bot Financeiro V5.0 ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -107,6 +113,7 @@ app.post('/webhook', async (req, res) => {
             const msgBody = message.text ? message.text.body : null;
 
             if (from !== NUMERO_DONO) {
+                console.log(`Acesso negado para: ${from}`);
                 res.sendStatus(200);
                 return;
             }
@@ -114,16 +121,20 @@ app.post('/webhook', async (req, res) => {
             if (msgBody) {
                 try {
                     await markMessageAsRead(message.id);
+
                     const prompt = `
-                    Aja como um assistente financeiro pessoal.
-                    O usuário enviou: "${msgBody}"
-                    Data de hoje: ${new Date().toLocaleDateString('pt-BR')}
+                    Você é um contador pessoal.
+                    Mensagem do Usuário: "${msgBody}"
+                    Data de Hoje: ${getDataBrasilia()}
+
+                    CATEGORIAS PERMITIDAS: Alimentação, Transporte, Lazer, Casa, Contas, Saúde, Investimento, Outros.
 
                     REGRAS:
-                    1. Se for gasto/ganho, JSON: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Categoria", "item": "Descrição", "valor": "0.00", "tipo": "Saída ou Entrada"}}
-                    2. Se for consulta, JSON: {"acao": "CONSULTAR"}
-                    3. Se for conversa, JSON: {"acao": "CONVERSAR", "resposta": "Texto simpático"}
-                    Responda APENAS o JSON.
+                    1. DESPESA/RECEITA: Retorne JSON {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Selecione a melhor", "item": "Descrição Curta", "valor": "0.00", "tipo": "Saída ou Entrada"}}
+                    2. CONSULTA: Retorne JSON {"acao": "CONSULTAR"}
+                    3. CONVERSA: Retorne JSON {"acao": "CONVERSAR", "resposta": "Texto curto e amigável"}
+                    
+                    Retorne APENAS o JSON.
                     `;
 
                     const result = await model.generateContent(prompt);
@@ -132,22 +143,22 @@ app.post('/webhook', async (req, res) => {
                     let respostaFinal = "";
 
                     if (!ia) {
-                        respostaFinal = rawText; 
+                        respostaFinal = "Não entendi. Poderia simplificar?"; 
                     } else if (ia.acao === "REGISTRAR") {
                         const salvou = await adicionarNaPlanilha(ia.dados);
-                        if (salvou) respostaFinal = `✅ *Registrado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}`;
-                        else respostaFinal = "❌ Erro na planilha.";
+                        if (salvou) respostaFinal = `✅ *Registrado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}`;
+                        else respostaFinal = "❌ Erro ao salvar na planilha.";
                     } else if (ia.acao === "CONSULTAR") {
                         const dadosPlanilha = await lerUltimosGastos();
-                        const promptResumo = `Responda "${msgBody}" com base nestes dados:\n${dadosPlanilha}`;
+                        const promptResumo = `Baseado nestes dados:\n${dadosPlanilha}\n\nResponda a pergunta do usuário: "${msgBody}".`;
                         const analise = await model.generateContent(promptResumo);
                         respostaFinal = analise.response.text();
                     } else {
-                        respostaFinal = ia.resposta || rawText;
+                        respostaFinal = ia.resposta || "Olá!";
                     }
                     await sendMessage(from, respostaFinal);
                 } catch (error) {
-                    console.error('Erro crítico:', error);
+                    console.error('Erro Crítico do Bot:', error);
                 }
             }
         }
@@ -165,7 +176,7 @@ async function sendMessage(to, text) {
             headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
             data: { messaging_product: 'whatsapp', to: to, text: { body: text } }
         });
-    } catch (error) { console.error('Erro envio:', error.message); }
+    } catch (error) { console.error('Erro Envio WhatsApp:', error.message); }
 }
 
 async function markMessageAsRead(messageId) {
@@ -179,4 +190,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V5 rodando na porta ${PORT}`));
