@@ -19,7 +19,7 @@ const NUMERO_DONO = process.env.NUMERO_DONO;
 const SHEET_ID = process.env.SHEET_ID; 
 
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
 // --- UTILITÁRIOS ---
 
