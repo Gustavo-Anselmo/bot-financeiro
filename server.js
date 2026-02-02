@@ -42,18 +42,23 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- 🤖 MANUAL DE AJUDA (SEM NOME) ---
+// --- 🤖 MANUAL DE AJUDA COMPLETO ---
 function getMenuAjuda() {
-    return `🤖 *Olá! Sou sua Inteligência Artificial Financeira.*
+    return `🤖 *Olá! Sou seu Assistente Financeiro Inteligente.*
 
-✅ *O QUE EU FAÇO:*
+✅ *O QUE EU JÁ FAÇO:*
 1. 📝 *Registrar:* Mande áudio ou texto (ex: "Gastei 50 no mercado").
-2. 👮‍♂️ *Metas:* Te aviso se estourar o limite da categoria.
-3. 📅 *Fixos:* Digite *"Lançar fixos"* para registrar as contas do mês.
+2. 👮‍♂️ *Policial de Metas:* Te aviso na hora se estourar o limite da categoria.
+3. 📅 *Contas Fixas:* Digite *"Lançar fixos"* para registrar boletos do mês.
 4. 🔎 *Consultas:* Pergunte "Quanto gastei hoje?" ou "Resumo do mês".
-5. 🧠 *Organização:* Categorizo tudo automaticamente.
+5. 🧠 *Organização:* Categorizo tudo automaticamente (usando sua aba Metas).
 
-_Versão 9.3 - Sistema Online_ ⚡`;
+🚀 *FUTURAS ATUALIZAÇÕES (Em breve):*
+- 🎓 *Coach Financeiro:* Vou analisar seus hábitos e dar dicas.
+- 📊 *Gráficos:* Vou gerar imagens com gráficos direto no Zap.
+- 💳 *Cartão:* Gestão de faturas e datas de vencimento.
+
+_Versão 9.4 - Sistema Online_ ⚡`;
 }
 
 // --- 🎧 AUDIO ---
@@ -95,8 +100,7 @@ async function perguntarParaGroq(promptUsuario) {
             {
                 model: "llama-3.3-70b-versatile",
                 messages: [
-                    // Voltou a ser um assistente genérico
-                    { role: "system", content: "Você é um assistente financeiro inteligente e prestativo." },
+                    { role: "system", content: "Você é um assistente financeiro pessoal." },
                     { role: "user", content: promptUsuario }
                 ],
                 temperature: 0.3 
@@ -230,7 +234,7 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V9.3 (Correção de Nome) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V9.4 (Menu Completo) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -260,8 +264,8 @@ app.post('/webhook', async (req, res) => {
                 if (textoParaIA) {
                     const txt = textoParaIA.toLowerCase();
 
-                    // 1. MENU AJUDA
-                    if (txt.includes('o que você faz') || txt.includes('ajuda') || txt.includes('menu') || txt.includes('funções') || txt.includes('funcões')) {
+                    // 1. MENU AJUDA (Ativado por várias palavras)
+                    if (txt.includes('o que você faz') || txt.includes('ajuda') || txt.includes('menu') || txt.includes('funções') || txt.includes('funcões') || txt.includes('atualizações')) {
                         await sendMessage(from, getMenuAjuda());
                         res.sendStatus(200);
                         return;
@@ -310,7 +314,7 @@ app.post('/webhook', async (req, res) => {
                     else if (ia.acao === "CONSULTAR") {
                         const dadosCompletos = await lerDadosCompletos(from);
                         const promptResumo = `
-                        CONTEXTO: Você é um assistente financeiro.
+                        CONTEXTO: Assistente financeiro.
                         DATA: ${getDataBrasilia()}
                         DADOS: ${dadosCompletos}
                         PERGUNTA: "${textoParaIA}"
@@ -355,4 +359,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V9.3 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V9.4 rodando na porta ${PORT}`));
