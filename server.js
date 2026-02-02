@@ -1,88 +1,175 @@
 const express = require('express');
 const axios = require('axios');
-require('dotenv').config();
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleSpreadsheet } = require('google-spreadsheet');
+const { JWT } = require('google-auth-library');
+const creds = require('./google.json'); 
+require('dotenv').config();
 
 const app = express();
 app.use(express.json());
 
 // --- CONFIGURAÇÕES ---
 const PORT = process.env.PORT || 3000;
-const MY_TOKEN = process.env.MY_TOKEN; // Seu token de verificação (definido no dashboard)
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN; // Token da API do WhatsApp
-const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID; // ID do número de telefone
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY; // Sua chave da IA
+const MY_TOKEN = process.env.MY_TOKEN;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const NUMERO_DONO = process.env.NUMERO_DONO; 
+const SHEET_ID = process.env.SHEET_ID; 
 
-// 🔒 TRAVA DE SEGURANÇA (WHITELIST)
-// Substitua o número abaixo pelo SEU número (exatamente como aparece nos logs do Render)
-// Exemplo: "5575999998888" (DDI + DDD + Número)
-const NUMERO_DONO = "5575xxxxxxxxx"; 
-
-// Inicializando a IA do Google (Gemini)
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-// Rota de verificação do Webhook (GET)
+// --- FUNÇÃO FAXINEIRA (O Segredo da Inteligência) 🧹 ---
+function limparEConverterJSON(texto) {
+    try {
+        // 1. Remove formatação de código do Markdown (```json ... ```)
+        let limpo = texto.replace(/```json|```/g, "").trim();
+        
+        // 2. Tenta encontrar onde começa '{' e termina '}' para ignorar textos extras
+        const inicio = limpo.indexOf('{');
+        const fim = limpo.lastIndexOf('}');
+        
+        if (inicio !== -1 && fim !== -1) {
+            limpo = limpo.substring(inicio, fim + 1);
+        }
+
+        return JSON.parse(limpo);
+    } catch (e) {
+        console.error("Erro ao limpar JSON:", e);
+        return null; // Retorna nulo se falhar feio
+    }
+}
+
+// --- CONEXÃO COM A PLANILHA ---
+async function getDoc() {
+    const serviceAccountAuth = new JWT({
+        email: creds.client_email,
+        key: creds.private_key,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    const doc = new GoogleSpreadsheet(SHEET_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    return doc;
+}
+
+async function adicionarNaPlanilha(dados) {
+    try {
+        const doc = await getDoc();
+        const sheet = doc.sheetsByIndex[0]; 
+        await sheet.addRow({
+            'Data': dados.data,
+            'Categoria': dados.categoria,
+            'Item/Descrição': dados.item,
+            'Valor': dados.valor,
+            'Tipo': dados.tipo
+        });
+        return true;
+    } catch (error) {
+        console.error('Erro ao salvar:', error);
+        return false;
+    }
+}
+
+async function lerUltimosGastos() {
+    try {
+        const doc = await getDoc();
+        const sheet = doc.sheetsByIndex[0];
+        const rows = await sheet.getRows({ limit: 20, offset: 0 }); // Lê as últimas 20
+        
+        if (rows.length === 0) return "A planilha está vazia.";
+
+        let texto = "Histórico Recente:\n";
+        rows.forEach(row => {
+            texto += `- ${row.get('Data')}: ${row.get('Item/Descrição')} (R$ ${row.get('Valor')})\n`;
+        });
+        return texto;
+    } catch (error) {
+        return "Erro ao ler dados.";
+    }
+}
+
+// --- ROTAS ---
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
-
-    if (mode && token) {
-        if (mode === 'subscribe' && token === MY_TOKEN) {
-            console.log('WEBHOOK_VERIFIED');
-            res.status(200).send(challenge);
-        } else {
-            res.sendStatus(403);
-        }
-    }
+    if (mode === 'subscribe' && token === MY_TOKEN) res.status(200).send(challenge);
+    else res.sendStatus(403);
 });
 
-// Rota de recebimento de mensagens (POST)
 app.post('/webhook', async (req, res) => {
     const body = req.body;
-
-    console.log('Recebendo webhook...');
-
     if (body.object) {
-        if (body.entry && 
-            body.entry[0].changes && 
-            body.entry[0].changes[0].value.messages && 
-            body.entry[0].changes[0].value.messages[0]
-        ) {
+        if (body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages && body.entry[0].changes[0].value.messages[0]) {
             const message = body.entry[0].changes[0].value.messages[0];
-            const from = message.from; // Quem enviou
+            const from = message.from;
             const msgBody = message.text ? message.text.body : null;
 
-            console.log(`Mensagem recebida de: ${from}`);
-            console.log(`Conteúdo: ${msgBody}`);
-
-            // --- 🔒 INÍCIO DA SEGURANÇA ---
-            // Se o número de quem enviou for DIFERENTE do seu número, a gente ignora.
+            // Filtro de Segurança (Seu Número)
             if (from !== NUMERO_DONO) {
-                console.log(`🚫 Acesso negado para o intruso: ${from}`);
-                res.sendStatus(200); // Responde 200 pro WhatsApp não reenviar, mas não faz nada.
+                res.sendStatus(200);
                 return;
             }
-            // --- 🔒 FIM DA SEGURANÇA ---
 
             if (msgBody) {
                 try {
-                    // 1. Marca a mensagem como lida (opcional, mas bom pra UX)
                     await markMessageAsRead(message.id);
 
-                    // 2. Envia para a IA (Gemini)
-                    console.log('Perguntando para o Gemini...');
-                    const result = await model.generateContent(msgBody);
-                    const responseText = result.response.text();
+                    // --- PROMPT MAIS HUMANO E TOLERANTE ---
+                    const prompt = `
+                    Aja como um assistente financeiro pessoal, inteligente e amigável.
+                    O usuário enviou: "${msgBody}"
+                    Data de hoje: ${new Date().toLocaleDateString('pt-BR')}
 
-                    // 3. Responde no WhatsApp
-                    console.log('Respondendo usuário...');
-                    await sendMessage(from, responseText);
+                    Sua missão é entender a intenção, corrigir pequenos erros de digitação e responder.
+                    
+                    REGRAS:
+                    1. Se o usuário informar um gasto ou ganho (ex: "comprei pão 10", "recebi 50", "gastei 20 no uber"), extraia os dados. Corrija erros (ex: "raies" -> "Reais").
+                       Retorne JSON: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Escolha a melhor", "item": "Descrição curta", "valor": "0.00", "tipo": "Saída ou Entrada"}}
+                    
+                    2. Se o usuário perguntar sobre gastos passados (ex: "quanto gastei?", "saldo", "histórico"), retorne JSON: {"acao": "CONSULTAR"}
+
+                    3. Se for conversa fiada, dúvidas gerais ou algo que não dê para registrar (ex: "oi", "qual o sentido da vida", "erro no sistema"), seja simpático.
+                       Retorne JSON: {"acao": "CONVERSAR", "resposta": "Sua resposta textual aqui"}
+
+                    IMPORTANTE: Responda APENAS o JSON. Sem markdown.
+                    `;
+
+                    const result = await model.generateContent(prompt);
+                    const rawText = result.response.text();
+                    
+                    // Usa a Faxineira para garantir que o JSON funcione
+                    let ia = limparEConverterJSON(rawText);
+
+                    let respostaFinal = "";
+
+                    if (!ia) {
+                        // Se a IA ficou maluca e não mandou JSON, a gente trata como conversa
+                        respostaFinal = rawText; 
+                    } else if (ia.acao === "REGISTRAR") {
+                        const salvou = await adicionarNaPlanilha(ia.dados);
+                        if (salvou) respostaFinal = `✅ *Registrado!* \n📝 ${ia.dados.item}\n💸 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}`;
+                        else respostaFinal = "❌ Erro ao conectar na planilha. Verifique o ID no Render.";
+                    
+                    } else if (ia.acao === "CONSULTAR") {
+                        const dadosPlanilha = await lerUltimosGastos();
+                        // Pede para a IA analisar os dados lidos
+                        const promptResumo = `Responda a pergunta "${msgBody}" baseando-se nestes dados da planilha:\n${dadosPlanilha}. Seja resumido e útil.`;
+                        const analise = await model.generateContent(promptResumo);
+                        respostaFinal = analise.response.text();
+
+                    } else {
+                        // É conversa ou a IA não entendeu como gasto
+                        respostaFinal = ia.resposta || rawText;
+                    }
+
+                    await sendMessage(from, respostaFinal);
 
                 } catch (error) {
-                    console.error('Erro ao processar mensagem:', error);
-                    await sendMessage(from, "Desculpe, tive um erro ao processar sua mensagem.");
+                    console.error('Erro crítico:', error);
+                    // Não mandamos mensagem de erro para o usuário para não poluir o chat, apenas logamos no Render.
                 }
             }
         }
@@ -92,49 +179,26 @@ app.post('/webhook', async (req, res) => {
     }
 });
 
-// Função auxiliar para enviar mensagem
 async function sendMessage(to, text) {
     try {
         await axios({
             method: 'POST',
             url: `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
-            headers: {
-                'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-                'Content-Type': 'application/json'
-            },
-            data: {
-                messaging_product: 'whatsapp',
-                to: to,
-                text: { body: text }
-            }
+            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
+            data: { messaging_product: 'whatsapp', to: to, text: { body: text } }
         });
-    } catch (error) {
-        console.error('Erro ao enviar mensagem no WhatsApp:', error.response ? error.response.data : error.message);
-    }
+    } catch (error) { console.error('Erro envio:', error.message); }
 }
 
-// Função auxiliar para marcar como lida
 async function markMessageAsRead(messageId) {
     try {
         await axios({
             method: 'POST',
             url: `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
-            headers: {
-                'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-                'Content-Type': 'application/json'
-            },
-            data: {
-                messaging_product: 'whatsapp',
-                status: 'read',
-                message_id: messageId
-            }
+            headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
+            data: { messaging_product: 'whatsapp', status: 'read', message_id: messageId }
         });
-    } catch (error) {
-        // Não precisa travar o bot se falhar ao marcar como lida
-        console.error('Erro ao marcar como lida (não crítico):', error.message);
-    }
+    } catch (error) { }
 }
 
-app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
