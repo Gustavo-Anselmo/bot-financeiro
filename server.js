@@ -24,7 +24,7 @@ function getDataBrasilia() {
 }
 
 function getMesAnoAtual() {
-    return getDataBrasilia().substring(3); // Ex: "02/2026"
+    return getDataBrasilia().substring(3); 
 }
 
 function limparEConverterJSON(texto) {
@@ -42,7 +42,7 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- 🎧 AUDIO (WHISPER) ---
+// --- 🎧 AUDIO ---
 async function transcreverAudio(mediaId) {
     try {
         const urlResponse = await axios.get(
@@ -113,31 +113,65 @@ async function getSheetParaUsuario(numeroUsuario) {
     return sheet;
 }
 
-// 🎯 1. PADRONIZAÇÃO: Pega as categorias da aba "Metas"
+// Leitura das Categorias (Para classificar certo)
 async function getCategoriasPermitidas() {
     try {
         const doc = await getDoc();
         const sheetMetas = doc.sheetsByTitle['Metas'];
-        if (!sheetMetas) return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; // Padrão se não achar
+        if (!sheetMetas) return "Alimentação, Transporte, Lazer, Casa, Contas, Outros";
         
         const rows = await sheetMetas.getRows();
-        const categorias = rows.map(row => row.get('Categoria')).filter(c => c); // Pega lista limpa
-        
+        const categorias = rows.map(row => row.get('Categoria')).filter(c => c);
         return categorias.length > 0 ? categorias.join(', ') : "Alimentação, Transporte, Lazer, Casa, Contas, Outros";
+    } catch (e) { return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; }
+}
+
+// 👁️ NOVA FUNÇÃO: LER TUDO (FIXOS + METAS) PARA CONSULTA
+async function lerDadosCompletos(numeroUsuario) {
+    try {
+        const doc = await getDoc();
+        let relatorio = "";
+
+        // 1. Ler Gastos Recentes (Extrato)
+        const sheetUser = await getSheetParaUsuario(numeroUsuario);
+        const rowsUser = await sheetUser.getRows({ limit: 30, offset: 0 });
+        relatorio += "📊 --- SEU EXTRATO RECENTE ---\n";
+        if (rowsUser.length > 0) {
+            rowsUser.forEach(row => {
+                relatorio += `- ${row.get('Data')}: ${row.get('Item/Descrição')} | R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
+            });
+        } else {
+            relatorio += "(Sem gastos recentes)\n";
+        }
+
+        // 2. Ler Configuração de Fixos
+        const sheetFixos = doc.sheetsByTitle['Fixos'];
+        relatorio += "\n📌 --- SEUS GASTOS FIXOS CADASTRADOS ---\n";
+        if (sheetFixos) {
+            const rowsFixos = await sheetFixos.getRows();
+            if (rowsFixos.length > 0) {
+                rowsFixos.forEach(row => {
+                    relatorio += `- ${row.get('Item')}: R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
+                });
+            } else { relatorio += "(Lista de fixos vazia)\n"; }
+        } else { relatorio += "(Aba 'Fixos' não existe)\n"; }
+
+        return relatorio;
+
     } catch (e) {
-        return "Alimentação, Transporte, Lazer, Casa, Contas, Outros";
+        console.error("Erro leitura total:", e);
+        return "Erro ao ler planilhas.";
     }
 }
 
-// 📅 3. GASTOS FIXOS: Lança tudo da aba "Fixos"
+// Função para lançar os fixos na planilha do usuário (Execução)
 async function lancarGastosFixos(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetFixos = doc.sheetsByTitle['Fixos'];
-        if (!sheetFixos) return "⚠️ Não encontrei a aba 'Fixos'. Crie ela com as colunas: Item, Valor, Categoria.";
-
+        if (!sheetFixos) return "⚠️ Aba 'Fixos' não encontrada.";
         const rowsFixos = await sheetFixos.getRows();
-        if (rowsFixos.length === 0) return "⚠️ A aba 'Fixos' está vazia.";
+        if (rowsFixos.length === 0) return "⚠️ Aba 'Fixos' vazia.";
 
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const dataHoje = getDataBrasilia();
@@ -148,58 +182,38 @@ async function lancarGastosFixos(numeroUsuario) {
             const item = row.get('Item');
             const valor = row.get('Valor');
             const cat = row.get('Categoria');
-
             await sheetUser.addRow({
-                'Data': dataHoje,
-                'Categoria': cat,
-                'Item/Descrição': item,
-                'Valor': valor,
-                'Tipo': 'Saída'
+                'Data': dataHoje, 'Categoria': cat, 'Item/Descrição': item, 'Valor': valor, 'Tipo': 'Saída'
             });
             total += parseFloat(valor.replace(',', '.'));
             resumo += `▪️ ${item}: R$ ${valor}\n`;
         }
-        return `✅ *Contas Fixas Lançadas!*\n\n${resumo}\n💰 *Total:* R$ ${total.toFixed(2)}`;
-    } catch (e) {
-        console.error("Erro Fixos:", e);
-        return "❌ Erro ao lançar fixos.";
-    }
+        return `✅ *Feito! Lançados para hoje:* \n\n${resumo}\n💰 Total: R$ ${total.toFixed(2)}`;
+    } catch (e) { return "❌ Erro ao lançar."; }
 }
 
-// 👮‍♂️ ALERTA DE META
 async function verificarMeta(categoria, valorNovo, numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetMetas = doc.sheetsByTitle['Metas'];
         if (!sheetMetas) return "";
-
         const metasRows = await sheetMetas.getRows();
-        // Normaliza para comparar (Tudo minúsculo)
         const metaRow = metasRows.find(row => row.get('Categoria').toLowerCase().trim() === categoria.toLowerCase().trim());
-        
         if (!metaRow) return ""; 
 
         const limite = parseFloat(metaRow.get('Limite').replace('R$', '').replace(',', '.'));
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const gastosRows = await sheetUser.getRows();
         const mesAtual = getMesAnoAtual();
-
         let totalGastoMes = 0;
         gastosRows.forEach(row => {
-            const dataRow = row.get('Data'); 
-            const catRow = row.get('Categoria');
-            const valorRow = parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
-
-            if (dataRow.includes(mesAtual) && catRow.toLowerCase().trim() === categoria.toLowerCase().trim()) {
-                totalGastoMes += valorRow;
+            if (row.get('Data').includes(mesAtual) && row.get('Categoria').toLowerCase().trim() === categoria.toLowerCase().trim()) {
+                totalGastoMes += parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
             }
         });
 
         const totalFinal = totalGastoMes + parseFloat(valorNovo);
-        
-        if (totalFinal > limite) {
-            return `\n\n🚨 *ALERTA:* Meta de ${categoria} estourada em R$ ${(totalFinal - limite).toFixed(2)}!`;
-        }
+        if (totalFinal > limite) return `\n\n🚨 *ALERTA:* Meta de ${categoria} estourada em R$ ${(totalFinal - limite).toFixed(2)}!`;
         return "";
     } catch (e) { return ""; }
 }
@@ -208,32 +222,14 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
     try {
         const sheet = await getSheetParaUsuario(numeroUsuario);
         await sheet.addRow({
-            'Data': dados.data,
-            'Categoria': dados.categoria,
-            'Item/Descrição': dados.item,
-            'Valor': dados.valor,
-            'Tipo': dados.tipo
+            'Data': dados.data, 'Categoria': dados.categoria, 'Item/Descrição': dados.item, 'Valor': dados.valor, 'Tipo': dados.tipo
         });
         return true;
     } catch (error) { return false; }
 }
 
-async function lerUltimosGastos(numeroUsuario) {
-    try {
-        const sheet = await getSheetParaUsuario(numeroUsuario);
-        const rows = await sheet.getRows({ limit: 30, offset: 0 }); 
-        if (rows.length === 0) return "A planilha está vazia.";
-        
-        let texto = "";
-        rows.forEach(row => {
-            texto += `- ${row.get('Data')}: ${row.get('Item/Descrição')} | R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
-        });
-        return texto;
-    } catch (error) { return "Erro ao ler dados."; }
-}
-
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V9.0 (Admin) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V9.1 (Visão Total) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -261,26 +257,25 @@ app.post('/webhook', async (req, res) => {
                 }
 
                 if (textoParaIA) {
-                    // 🚀 DETECTOR DE COMANDO MÁGICO "FIXOS"
-                    if (textoParaIA.toLowerCase().includes('lancar fixos') || textoParaIA.toLowerCase().includes('lançar fixos') || textoParaIA.toLowerCase().includes('contas fixas')) {
+                    // COMANDO MÁGICO
+                    if (textoParaIA.toLowerCase().includes('lancar fixos') || textoParaIA.toLowerCase().includes('lançar fixos')) {
                         const relatorio = await lancarGastosFixos(from);
                         await sendMessage(from, relatorio);
                         res.sendStatus(200);
                         return;
                     }
 
-                    // Se não for comando mágico, segue o fluxo normal com IA
                     const categoriasPermitidas = await getCategoriasPermitidas();
 
                     const promptClassificacao = `
                     Entrada: "${textoParaIA}"
                     Data: ${getDataBrasilia()}
                     
-                    ⚠️ REGRA DE OURO: Para a categoria, você DEVE escolher APENAS uma destas opções: [${categoriasPermitidas}]. Não invente nada novo.
+                    ⚠️ REGRA: Categorias permitidas: [${categoriasPermitidas}].
 
                     Classifique em UM dos JSONs:
-                    1. GASTO/GANHO: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Uma das opções acima", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
-                    2. CONSULTA: {"acao": "CONSULTAR"}
+                    1. GASTO/GANHO: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Uma das permitidas", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
+                    2. CONSULTA (Perguntas, dúvidas, ver fixos): {"acao": "CONSULTAR"}
                     3. CONVERSA: {"acao": "CONVERSAR", "resposta": "Sua resposta"}
                     
                     RESPONDA APENAS O JSON.
@@ -303,11 +298,21 @@ app.post('/webhook', async (req, res) => {
                         }
                     } 
                     else if (ia.acao === "CONSULTAR") {
-                        const dadosPlanilha = await lerUltimosGastos(from);
+                        // 👇 AQUI A CORREÇÃO: LÊ TUDO (FIXOS + EXTRATO) ANTES DE RESPONDER
+                        const dadosCompletos = await lerDadosCompletos(from);
+                        
                         const promptResumo = `
                         CONTEXTO: Contador pessoal.
                         DATA: ${getDataBrasilia()}
-                        DADOS: ${dadosPlanilha}
+                        
+                        DADOS FINANCEIROS COMPLETOS (Extrato + Configurações de Fixos):
+                        ${dadosCompletos}
+
+                        ⚠️ INSTRUÇÃO CRÍTICA:
+                        Use os dados acima para responder. VOCÊ TEM PERMISSÃO TOTAL PARA LER.
+                        Se o usuário perguntar "quais são meus fixos", LEIA a seção "SEUS GASTOS FIXOS CADASTRADOS" acima e liste eles.
+                        NÃO DIGA QUE A PLANILHA ESTÁ VAZIA SE HOUVER DADOS EM "GASTOS FIXOS".
+
                         PERGUNTA: "${textoParaIA}"
                         ESTILO: WhatsApp (Emojis, Negrito, Lista).
                         JSON RESPOSTA: {"resposta": "Texto"}
@@ -322,14 +327,10 @@ app.post('/webhook', async (req, res) => {
                     await sendMessage(from, respostaFinal);
                 }
 
-            } catch (error) {
-                console.error('Erro Geral:', error);
-            }
+            } catch (error) { console.error('Erro Geral:', error); }
         }
         res.sendStatus(200);
-    } else {
-        res.sendStatus(404);
-    }
+    } else { res.sendStatus(404); }
 });
 
 async function sendMessage(to, text) {
@@ -340,7 +341,7 @@ async function sendMessage(to, text) {
             headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
             data: { messaging_product: 'whatsapp', to: to, text: { body: text } }
         });
-    } catch (error) { console.error('Erro Zap:', error.message); }
+    } catch (error) { }
 }
 
 async function markMessageAsRead(messageId) {
@@ -354,4 +355,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V9.0 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V9.1 rodando na porta ${PORT}`));
