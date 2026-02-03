@@ -1,4 +1,3 @@
-// src/services/ai.js
 const axios = require('axios');
 const FormData = require('form-data');
 const { Readable } = require('stream');
@@ -8,28 +7,30 @@ require('dotenv').config();
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
-// 🧠 PERSONALIDADE BLINDADA V13
 const SYSTEM_PROMPT = `
-Você é um Assistente Financeiro Pessoal Profissional.
+Você é um Assistente Financeiro Profissional.
 
-DIRETRIZES RÍGIDAS:
-1. **Foco Absoluto:** Você só discute finanças, gastos, economia e organização.
-   - Se o usuário perguntar sobre receitas (bolo), piadas, política ou amenidades: Recuse educadamente.
-   - Exemplo de recusa: "Desculpe, meu foco é exclusivo em organizar suas finanças. Posso ajudar com seu orçamento?"
+CAPACIDADES AVANÇADAS:
+1. **Registrar:** Gastos e ganhos.
+2. **Editar:** Se o usuário pedir para mudar valor ou nome de um gasto anterior.
+3. **Excluir:** Se o usuário pedir para apagar/remover/cancelar um gasto.
+4. **Categorias:** Sugerir se não existir.
 
-2. **Formatação Visual:**
-   - Use **Negrito** para valores, categorias e nomes de itens.
-   - Use listas e quebras de linha para facilitar a leitura no WhatsApp.
+REGRAS:
+- Se o usuário pedir para "Mudar o valor da Padaria para 20", use a ação EDITAR.
+- Se pedir para "Apagar o último gasto", use EXCLUIR com item: "ULTIMO".
+- Se pedir para "Apagar a Padaria", use EXCLUIR com item: "Padaria".
+- Se gasto não tem categoria, use SUGERIR_CRIACAO.
 
-3. **Inteligência:**
-   - Se o gasto não tiver categoria óbvia, use SUGERIR_CRIACAO.
-   - Não use categoria "Outros" a menos que seja impossível classificar.
-
-SUAS AÇÕES (JSON):
-- REGISTRAR (Gastos/Ganhos)
-- CADASTRAR_FIXO (Contas recorrentes)
-- SUGERIR_CRIACAO (Categorias novas)
-- CONSULTA (Gráficos/Resumos)
+JSON SAÍDA:
+{"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Existente", "item": "Nome", "valor": "0.00", "tipo": "Saída"}}
+{"acao": "SUGERIR_CRIACAO", "dados": {"sugestao": "NomeNova", "item_original": "NomeGasto"}}
+{"acao": "CRIAR_CATEGORIA", "dados": {"nova_categoria": "Nome"}}
+{"acao": "EDITAR", "dados": {"item": "NomeOuULTIMO", "novo_valor": "0.00"}}
+{"acao": "EXCLUIR", "dados": {"item": "NomeOuULTIMO"}}
+{"acao": "CADASTRAR_FIXO", "dados": {"item": "Nome", "valor": "0.00", "categoria": "Uma das permitidas"}}
+{"acao": "CONSULTAR"}
+{"acao": "CONVERSAR", "resposta": "..."}
 `;
 
 async function perguntarParaGroq(prompt) {
@@ -72,7 +73,7 @@ async function analisarImagemComVision(mediaId) {
             messages: [{
                 role: "user",
                 content: [
-                    { type: "text", text: "Analise a nota fiscal/recibo. JSON: {\"acao\": \"REGISTRAR\", \"dados\": {\"data\": \"HOJE\", \"categoria\": \"Outros\", \"item\": \"Nome\", \"valor\": \"0.00\", \"tipo\": \"Saída\"}}" },
+                    { type: "text", text: "Analise nota fiscal. JSON: {\"acao\": \"REGISTRAR\", \"dados\": {\"data\": \"HOJE\", \"categoria\": \"Outros\", \"item\": \"Nome\", \"valor\": \"0.00\", \"tipo\": \"Saída\"}}" },
                     { type: "image_url", image_url: { url: dataUrl } }
                 ]
             }],

@@ -1,4 +1,3 @@
-// src/services/sheets.js
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const creds = require('../../google.json'); 
@@ -25,23 +24,53 @@ async function getSheetParaUsuario(numeroUsuario) {
     return sheet;
 }
 
-// 🆕 NOVA FUNÇÃO: VERIFICA SE O USUÁRIO JÁ EXISTE (PARA DAR BOAS-VINDAS)
 async function verificarUsuarioNovo(numero) {
     try {
         const doc = await getDoc();
-        // Verifica se existe a aba do usuário (Extrato) ou se ele está na lista de avisos
         const sheetExtrato = doc.sheetsByTitle[numero];
         let sheetUsers = doc.sheetsByTitle['Usuarios'];
-        
         let cadastradoEmUsers = false;
         if (sheetUsers) {
             const rows = await sheetUsers.getRows();
             cadastradoEmUsers = rows.some(r => r.get('Numero') === numero);
         }
-
-        // Se não tem aba de extrato E não está na lista de avisos, é NOVO.
         if (!sheetExtrato && !cadastradoEmUsers) return true;
         return false;
+    } catch (e) { return false; }
+}
+
+async function editarUltimoGasto(nomeItem, novoValor, numeroUsuario) {
+    try {
+        const sheet = await getSheetParaUsuario(numeroUsuario);
+        const rows = await sheet.getRows();
+        let rowToEdit;
+        if (nomeItem === 'ULTIMO') {
+            rowToEdit = rows[rows.length - 1];
+        } else {
+            rowToEdit = rows.reverse().find(r => r.get('Item/Descrição').toLowerCase().includes(nomeItem.toLowerCase()));
+        }
+        if (!rowToEdit) return false;
+        rowToEdit.set('Valor', novoValor);
+        await rowToEdit.save();
+        return { item: rowToEdit.get('Item/Descrição'), novo_valor: novoValor };
+    } catch (e) { return false; }
+}
+
+async function excluirGasto(nomeItem, numeroUsuario) {
+    try {
+        const sheet = await getSheetParaUsuario(numeroUsuario);
+        const rows = await sheet.getRows();
+        let rowToDelete;
+        if (nomeItem === 'ULTIMO') {
+            rowToDelete = rows[rows.length - 1];
+        } else {
+            rowToDelete = rows.reverse().find(r => r.get('Item/Descrição').toLowerCase().includes(nomeItem.toLowerCase()));
+        }
+        if (!rowToDelete) return false;
+        const nomeRemovido = rowToDelete.get('Item/Descrição');
+        const valorRemovido = rowToDelete.get('Valor');
+        await rowToDelete.delete();
+        return { item: nomeRemovido, valor: valorRemovido };
     } catch (e) { return false; }
 }
 
@@ -75,9 +104,9 @@ async function inscreverUsuario(numero) {
     let sheetUsers = doc.sheetsByTitle['Usuarios'];
     if (!sheetUsers) sheetUsers = await doc.addSheet({ title: 'Usuarios', headerValues: ['Numero', 'Ativo'] });
     const rows = await sheetUsers.getRows();
-    if (rows.find(row => row.get('Numero') === numero)) return "⚠️ *Aviso:* Seu número já está na lista de lembretes.";
+    if (rows.find(row => row.get('Numero') === numero)) return "⚠️ *Aviso:* Seu número já está na lista.";
     await sheetUsers.addRow({ 'Numero': numero, 'Ativo': 'Sim' });
-    return "✅ *Lembretes Ativados!*\n\nVocê receberá notificações diárias às 09:40 para não esquecer de registrar nada.";
+    return "✅ *Lembretes Ativados!*";
 }
 
 async function cadastrarNovoFixo(dados) {
@@ -92,9 +121,9 @@ async function lancarGastosFixos(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetFixos = doc.sheetsByTitle['Fixos'];
-        if (!sheetFixos) return "⚠️ Não encontrei a aba de gastos fixos.";
+        if (!sheetFixos) return "⚠️ Sem fixos.";
         const rowsFixos = await sheetFixos.getRows();
-        if (rowsFixos.length === 0) return "⚠️ Sua lista de fixos está vazia.";
+        if (rowsFixos.length === 0) return "⚠️ Lista vazia.";
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const dataHoje = getDataBrasilia();
         let total = 0;
@@ -107,8 +136,8 @@ async function lancarGastosFixos(numeroUsuario) {
             total += parseFloat(valor.replace('R$', '').replace(',', '.'));
             resumo += `▪️ ${item}: R$ ${valor}\n`;
         }
-        return `✅ *Lançamento Mensal Concluído*\n\n${resumo}\n💰 *Total:* R$ ${total.toFixed(2)}`;
-    } catch (e) { return "❌ Erro ao lançar fixos."; }
+        return `✅ *Lançados:*\n${resumo}\n💰 Total: R$ ${total.toFixed(2)}`;
+    } catch (e) { return "Erro."; }
 }
 
 async function adicionarNaPlanilha(dados, numeroUsuario) {
@@ -135,7 +164,7 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
                 totalGastoMes += parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
             }
         });
-        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *ALERTA:* Você estourou o limite de ${categoria}!`;
+        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *ALERTA:* Meta estourada!`;
         return "";
     } catch (e) { return ""; }
 }
@@ -176,5 +205,6 @@ async function getUsuariosAtivos() {
 
 module.exports = { 
     getDoc, getSheetParaUsuario, getCategoriasPermitidas, criarNovaCategoria, inscreverUsuario, 
-    adicionarNaPlanilha, cadastrarNovoFixo, lancarGastosFixos, verificarMeta, gerarGraficoPizza, getUsuariosAtivos, verificarUsuarioNovo 
+    adicionarNaPlanilha, cadastrarNovoFixo, lancarGastosFixos, verificarMeta, gerarGraficoPizza, getUsuariosAtivos, verificarUsuarioNovo,
+    editarUltimoGasto, excluirGasto 
 };

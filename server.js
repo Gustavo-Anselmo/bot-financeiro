@@ -1,8 +1,7 @@
-// server.js
 const express = require('express');
 const cron = require('node-cron');
 const { getDataBrasilia, limparEConverterJSON } = require('./src/utils');
-const { sendMessage, markMessageAsRead } = require('./src/services/whatsapp');
+const { sendMessage, sendButtonMessage, markMessageAsRead } = require('./src/services/whatsapp');
 const { perguntarParaGroq, transcreverAudio, analisarImagemComVision } = require('./src/services/ai');
 const sheets = require('./src/services/sheets'); 
 require('dotenv').config();
@@ -12,35 +11,27 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const MY_TOKEN = process.env.MY_TOKEN;
 
-// 🎨 MENU BONITO E FORMATADO
-const MENU_AJUDA = `👋 *Olá! Sou seu Assistente Financeiro.*
+const MENU_AJUDA = `👋 *Assistente Financeiro V13.0*
 
-Estou aqui para organizar seu dinheiro de forma simples. Veja o que posso fazer:
+*1. Registro Rápido*
+_"Gastei 50 no Uber"_
+_"Apagar último gasto"_ (Novo!)
+_"Mudar valor do Uber para 60"_ (Novo!)
 
-📝 *1. Registrar Gastos*
-Envie texto, áudio ou foto.
-_"Gastei 150 no mercado"_
-_"Recebi 500 de pix"_
-
-🔄 *2. Contas Fixas*
-Organize seus boletos mensais.
+*2. Gestão*
 _"Cadastrar fixo Aluguel 1200"_
-_"Lançar fixos"_ (para confirmar no mês)
+_"Lançar fixos"_
 
-📂 *3. Categorias Inteligentes*
-Eu organizo tudo. Se a categoria não existir, eu crio para você.
+*3. Categorias*
+Eu uso botões para criar novas categorias!
 
-📊 *4. Consultas*
-_"Gerar gráfico"_ ou _"Resumo do mês"_
+*4. Consultas*
+_"Gerar gráfico"_ | _"Resumo"_
+_"Ativar lembretes"_`;
 
-🔔 *Dica:* Digite _"Ativar lembretes"_ para eu te avisar todo dia.
-
-Como quer começar?`;
-
-// CRON JOB
 cron.schedule('40 09 * * 1-5', async () => {
     const usuarios = await sheets.getUsuariosAtivos();
-    if (usuarios.length > 0) usuarios.forEach(num => sendMessage(num, "☀️ *Bom dia!*\n\nLembrete rápido: teve algum gasto ontem ou hoje? Registre agora para manter o controle em dia."));
+    if (usuarios.length > 0) usuarios.forEach(num => sendMessage(num, "☀️ Bom dia! Registre seus gastos de hoje para manter o controle."));
 }, { scheduled: true, timezone: "America/Sao_Paulo" });
 
 app.get('/webhook', (req, res) => {
@@ -59,20 +50,32 @@ app.post('/webhook', async (req, res) => {
             let textoParaIA = null;
             let ia = null;
 
-            // --- 🆕 BOAS-VINDAS PARA NOVATOS ---
+            if (message.type === 'interactive' && message.interactive.type === 'button_reply') {
+                const idBotao = message.interactive.button_reply.id;
+                if (idBotao.startsWith('CRIAR_')) {
+                    const nomeCategoria = idBotao.replace('CRIAR_', '');
+                    await sendMessage(from, `🔄 Criando categoria *${nomeCategoria}*...`);
+                    const criou = await sheets.criarNovaCategoria(nomeCategoria);
+                    if (criou) await sendMessage(from, `✅ Categoria *${nomeCategoria}* criada com sucesso! Pode usar.`);
+                    else await sendMessage(from, `⚠️ A categoria *${nomeCategoria}* já existe.`);
+                } 
+                else if (idBotao === 'CANCELAR_CRIACAO') {
+                    await sendMessage(from, "❌ Operação cancelada. O gasto não foi registrado.");
+                }
+                return res.sendStatus(200); 
+            }
+
             const isNovo = await sheets.verificarUsuarioNovo(from);
             if (isNovo) {
-                // Se é novo, cria a aba dele (silenciosamente) e manda o menu
                 await sheets.getSheetParaUsuario(from); 
                 await sendMessage(from, MENU_AJUDA);
                 return res.sendStatus(200);
             }
 
-            // INPUTS
             if (message.type === 'image') {
-                await sendMessage(from, "📸 *Imagem recebida!* Processando...");
+                await sendMessage(from, "📸 Processando imagem...");
                 ia = await analisarImagemComVision(message.image.id);
-                if (!ia) await sendMessage(from, "⚠️ Não consegui ler a imagem. Tente uma foto mais clara.");
+                if (!ia) await sendMessage(from, "⚠️ Erro ao ler imagem.");
             } else if (message.type === 'audio') {
                 textoParaIA = await transcreverAudio(message.audio.id);
             } else if (message.type === 'text') {
@@ -81,20 +84,13 @@ app.post('/webhook', async (req, res) => {
 
             if (textoParaIA && !ia) {
                 const txt = textoParaIA.toLowerCase();
-                const gatilhos = ['ajuda', 'menu', 'o que voce faz', 'funciona', 'funcoes', 'funções', 'ola', 'oi', 'comecar'];
+                const gatilhos = ['ajuda', 'menu', 'o que voce faz', 'funcoes', 'oi', 'ola'];
                 
-                if (gatilhos.some(g => txt.includes(g))) { 
-                    await sendMessage(from, MENU_AJUDA); return res.sendStatus(200); 
-                }
-                
-                if (txt.includes('ativar lembretes')) { 
-                    await sendMessage(from, await sheets.inscreverUsuario(from)); return res.sendStatus(200); 
-                }
-                
-                if (txt.includes('lancar fixos') || txt.includes('lançar fixos')) {
-                    await sendMessage(from, "🔄 *Processando fixos...*");
-                    const relatorio = await sheets.lancarGastosFixos(from);
-                    await sendMessage(from, relatorio);
+                if (gatilhos.some(g => txt.includes(g))) { await sendMessage(from, MENU_AJUDA); return res.sendStatus(200); }
+                if (txt.includes('ativar lembretes')) { await sendMessage(from, await sheets.inscreverUsuario(from)); return res.sendStatus(200); }
+                if (txt.includes('lancar fixos')) {
+                    await sendMessage(from, "🔄 Processando fixos...");
+                    await sendMessage(from, await sheets.lancarGastosFixos(from));
                     return res.sendStatus(200);
                 }
 
@@ -103,10 +99,17 @@ app.post('/webhook', async (req, res) => {
                 const prompt = `
                 Input: "${textoParaIA}" | Data: ${getDataBrasilia()} | Categorias: [${cats}]
                 
+                REGRAS:
+                - Encaixa? REGISTRAR.
+                - Não encaixa? SUGERIR_CRIACAO.
+                - Pediu "Mudar valor"? EDITAR.
+                - Pediu "Apagar"? EXCLUIR.
+
                 JSON:
                 {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Existente", "item": "Nome", "valor": "0.00", "tipo": "Saída"}}
                 {"acao": "SUGERIR_CRIACAO", "dados": {"sugestao": "NomeNova", "item_original": "NomeGasto"}}
-                {"acao": "CRIAR_CATEGORIA", "dados": {"nova_categoria": "Nome"}}
+                {"acao": "EDITAR", "dados": {"item": "NomeOuULTIMO", "novo_valor": "0.00"}}
+                {"acao": "EXCLUIR", "dados": {"item": "NomeOuULTIMO"}}
                 {"acao": "CADASTRAR_FIXO", "dados": {"item": "Nome", "valor": "0.00", "categoria": "Uma das permitidas"}}
                 {"acao": "CONSULTAR"}
                 {"acao": "CONVERSAR", "resposta": "..."}
@@ -121,37 +124,50 @@ app.post('/webhook', async (req, res) => {
                     const salvou = await sheets.adicionarNaPlanilha(ia.dados, from);
                     if (salvou) {
                         const alerta = await sheets.verificarMeta(ia.dados.categoria, ia.dados.valor, from);
-                        await sendMessage(from, `✅ *Anotado!*\n\n📝 *${ia.dados.item}*\n💰 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}${alerta}`);
+                        await sendMessage(from, `✅ *Registrado*\n📝 ${ia.dados.item}\n💰 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}${alerta}`);
                     }
                 } 
                 else if (ia.acao === "SUGERIR_CRIACAO") {
-                    await sendMessage(from, `🤔 Sem categoria para *"${ia.dados.item_original}"*.\n\nSugiro criar: *${ia.dados.sugestao}*.\n\nPara aceitar, responda: "Criar categoria ${ia.dados.sugestao}"`);
+                    const sugestao = ia.dados.sugestao;
+                    await sendButtonMessage(
+                        from, 
+                        `🤔 Categoria inexistente para *"${ia.dados.item_original}"*.\n\nDeseja criar *${sugestao}*?`,
+                        [
+                            { id: `CRIAR_${sugestao}`, title: 'Sim, Criar' },
+                            { id: 'CANCELAR_CRIACAO', title: 'Não' }
+                        ]
+                    );
                 }
-                else if (ia.acao === "CRIAR_CATEGORIA") {
-                    const criou = await sheets.criarNovaCategoria(ia.dados.nova_categoria);
-                    if (criou) await sendMessage(from, `✨ Categoria *${ia.dados.nova_categoria}* criada com sucesso!`);
-                    else await sendMessage(from, `⚠️ A categoria *${ia.dados.nova_categoria}* já existe.`);
+                else if (ia.acao === "EDITAR") {
+                    const resultado = await sheets.editarUltimoGasto(ia.dados.item, ia.dados.novo_valor, from);
+                    if (resultado) await sendMessage(from, `✏️ *Atualizado!*\nO item *"${resultado.item}"* agora custa *R$ ${resultado.novo_valor}*.`);
+                    else await sendMessage(from, `❌ Não encontrei nenhum gasto com nome *"${ia.dados.item}"* recentemente.`);
+                }
+                else if (ia.acao === "EXCLUIR") {
+                    const resultado = await sheets.excluirGasto(ia.dados.item, from);
+                    if (resultado) await sendMessage(from, `🗑️ *Removido!*\nApaguei o gasto: *${resultado.item}* (R$ ${resultado.valor}).`);
+                    else await sendMessage(from, `❌ Não encontrei nada para apagar.`);
                 }
                 else if (ia.acao === "CADASTRAR_FIXO") {
                     await sheets.cadastrarNovoFixo(ia.dados);
-                    await sendMessage(from, `📌 *Fixo Configurado!*\n\nItem: ${ia.dados.item}\nValor: R$ ${ia.dados.valor}\n\nLembre de usar "Lançar fixos" mensalmente.`);
+                    await sendMessage(from, "📌 Fixo configurado.");
                 } 
                 else if (ia.acao === "CONSULTAR") {
                     if (textoParaIA && textoParaIA.toLowerCase().includes('grafico')) {
                         const url = await sheets.gerarGraficoPizza(from);
-                        if (url) await sendMessage(from, "📊 *Sua Análise:*", url);
-                        else await sendMessage(from, "📉 Sem dados suficientes.");
+                        if (url) await sendMessage(from, "📊 *Análise:*", url);
+                        else await sendMessage(from, "📉 Sem dados.");
                     } else {
                         const doc = await sheets.getDoc();
                         const sheetUser = await sheets.getSheetParaUsuario(from);
                         const rows = await sheetUser.getRows({limit:20});
                         let resumo = rows.map(r => `${r.get('Data')}: ${r.get('Item/Descrição')} - R$ ${r.get('Valor')}`).join('\n');
-                        const resp = await perguntarParaGroq(`Dados:\n${resumo}\n\nPergunta: "${textoParaIA || 'Resumo'}". Responda de forma analítica e bonita.`);
+                        const resp = await perguntarParaGroq(`Dados:\n${resumo}\n\nPergunta: "${textoParaIA || 'Resumo'}". Responda bonito.`);
                         await sendMessage(from, resp);
                     }
                 } 
                 else {
-                    await sendMessage(from, ia.resposta || "Desculpe, não entendi.");
+                    await sendMessage(from, ia.resposta || "Não entendi.");
                 }
             }
         } catch (e) { console.error("Erro Controller:", e); }
@@ -159,4 +175,4 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200);
 });
 
-app.listen(PORT, () => console.log(`Servidor V13.0 (Polido) na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V13.0 Completo rodando na porta ${PORT}`));
