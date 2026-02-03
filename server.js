@@ -282,13 +282,25 @@ app.post('/webhook', async (req, res) => {
                 return res.sendStatus(200);
             }
 
-            // ✅ Busca categorias permitidas
-            const categoriasPermitidas = await sheets.getCategoriasPermitidas();
+            // ✅ CORREÇÃO: Busca categorias e trata corretamente o resultado
+            const categoriasResult = await sheets.getCategoriasPermitidas();
+            
+            // ✅ Converte para array se necessário e depois para string
+            let categoriasTexto;
+            if (Array.isArray(categoriasResult)) {
+                categoriasTexto = categoriasResult.join(', ');
+            } else if (typeof categoriasResult === 'string') {
+                categoriasTexto = categoriasResult;
+            } else {
+                console.warn('[CATEGORIAS] Formato inesperado:', categoriasResult);
+                categoriasTexto = 'Alimentação, Transporte, Saúde, Outros';
+            }
+            
             const dataAtual = getDataBrasilia();
 
             const promptCompleto = `
 Data de hoje: ${dataAtual}
-Categorias existentes: ${categoriasPermitidas.join(', ')}
+Categorias existentes: ${categoriasTexto}
 
 Mensagem do usuário: "${textoParaIA}"
 
