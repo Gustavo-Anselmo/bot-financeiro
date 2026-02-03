@@ -7,7 +7,6 @@ require('dotenv').config();
 
 const SHEET_ID = process.env.SHEET_ID;
 
-// --- CONFIGURAÇÃO DA PLANILHA ---
 async function getDoc() {
     const serviceAccountAuth = new JWT({
         email: creds.client_email,
@@ -26,7 +25,6 @@ async function getSheetParaUsuario(numeroUsuario) {
     return sheet;
 }
 
-// --- CATEGORIAS E METAS ---
 async function criarNovaCategoria(novaCategoria) {
     try {
         const doc = await getDoc();
@@ -54,15 +52,14 @@ async function getCategoriasPermitidas() {
     } catch (e) { return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; }
 }
 
-// --- USUÁRIOS E FIXOS ---
 async function inscreverUsuario(numero) {
     const doc = await getDoc();
     let sheetUsers = doc.sheetsByTitle['Usuarios'];
     if (!sheetUsers) sheetUsers = await doc.addSheet({ title: 'Usuarios', headerValues: ['Numero', 'Ativo'] });
     const rows = await sheetUsers.getRows();
-    if (rows.find(row => row.get('Numero') === numero)) return "✅ Já está ativo!";
+    if (rows.find(row => row.get('Numero') === numero)) return "Seu número já consta na lista de lembretes ativos.";
     await sheetUsers.addRow({ 'Numero': numero, 'Ativo': 'Sim' });
-    return "🔔 Notificações Ativadas!";
+    return "Lembretes ativados.\n\nVocê receberá notificações diárias às 09:40 para manter seus registros atualizados.";
 }
 
 async function cadastrarNovoFixo(dados) {
@@ -73,15 +70,15 @@ async function cadastrarNovoFixo(dados) {
     return true;
 }
 
-// 🚨 A FUNÇÃO QUE TINHA SUMIDO FOI RESTAURADA AQUI 👇
+// ✅ FUNÇÃO VERIFICADA: ESTÁ AQUI
 async function lancarGastosFixos(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetFixos = doc.sheetsByTitle['Fixos'];
-        if (!sheetFixos) return "⚠️ Você ainda não cadastrou fixos.";
+        if (!sheetFixos) return "Não há registro de gastos fixos para processar.";
         
         const rowsFixos = await sheetFixos.getRows();
-        if (rowsFixos.length === 0) return "⚠️ Sua lista de fixos está vazia.";
+        if (rowsFixos.length === 0) return "Sua lista de despesas fixas está vazia.";
 
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const dataHoje = getDataBrasilia();
@@ -98,16 +95,15 @@ async function lancarGastosFixos(numeroUsuario) {
             });
             
             total += parseFloat(valor.replace('R$', '').replace(',', '.'));
-            resumo += `▪️ ${item} (R$ ${valor})\n`;
+            resumo += `- ${item}: R$ ${valor}\n`;
         }
-        return `✅ *Fixos lançados com sucesso!*\n\n${resumo}\n💰 Total: R$ ${total.toFixed(2)}`;
+        return `Processamento concluído.\n\n*Resumo dos Lançamentos:*\n${resumo}\nTotal Debitado: R$ ${total.toFixed(2)}`;
     } catch (e) { 
         console.error(e);
-        return "❌ Erro ao lançar fixos."; 
+        return "Erro ao processar os gastos fixos. Verifique a planilha."; 
     }
 }
 
-// --- REGISTROS E CONSULTAS ---
 async function adicionarNaPlanilha(dados, numeroUsuario) {
     const sheet = await getSheetParaUsuario(numeroUsuario);
     await sheet.addRow({ 'Data': dados.data, 'Categoria': dados.categoria, 'Item/Descrição': dados.item, 'Valor': dados.valor, 'Tipo': dados.tipo });
@@ -132,7 +128,7 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
                 totalGastoMes += parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
             }
         });
-        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *META ESTOURADA!*`;
+        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n⚠️ *Atenção:* O limite de gastos para ${categoria} foi excedido.`;
         return "";
     } catch (e) { return ""; }
 }
