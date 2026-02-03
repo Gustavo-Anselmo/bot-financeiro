@@ -25,16 +25,34 @@ async function getSheetParaUsuario(numeroUsuario) {
     return sheet;
 }
 
+// 🆕 NOVA FUNÇÃO: VERIFICA SE O USUÁRIO JÁ EXISTE (PARA DAR BOAS-VINDAS)
+async function verificarUsuarioNovo(numero) {
+    try {
+        const doc = await getDoc();
+        // Verifica se existe a aba do usuário (Extrato) ou se ele está na lista de avisos
+        const sheetExtrato = doc.sheetsByTitle[numero];
+        let sheetUsers = doc.sheetsByTitle['Usuarios'];
+        
+        let cadastradoEmUsers = false;
+        if (sheetUsers) {
+            const rows = await sheetUsers.getRows();
+            cadastradoEmUsers = rows.some(r => r.get('Numero') === numero);
+        }
+
+        // Se não tem aba de extrato E não está na lista de avisos, é NOVO.
+        if (!sheetExtrato && !cadastradoEmUsers) return true;
+        return false;
+    } catch (e) { return false; }
+}
+
 async function criarNovaCategoria(novaCategoria) {
     try {
         const doc = await getDoc();
         let sheetMetas = doc.sheetsByTitle['Metas'];
         if (!sheetMetas) sheetMetas = await doc.addSheet({ title: 'Metas', headerValues: ['Categoria', 'Limite'] });
-        
         const rows = await sheetMetas.getRows();
         const existe = rows.find(r => r.get('Categoria').toLowerCase() === novaCategoria.toLowerCase());
         if (existe) return false;
-
         await sheetMetas.addRow({ 'Categoria': novaCategoria, 'Limite': 'R$ 1000,00' });
         return true;
     } catch (error) { return false; }
@@ -57,9 +75,9 @@ async function inscreverUsuario(numero) {
     let sheetUsers = doc.sheetsByTitle['Usuarios'];
     if (!sheetUsers) sheetUsers = await doc.addSheet({ title: 'Usuarios', headerValues: ['Numero', 'Ativo'] });
     const rows = await sheetUsers.getRows();
-    if (rows.find(row => row.get('Numero') === numero)) return "Seu número já consta na lista de lembretes ativos.";
+    if (rows.find(row => row.get('Numero') === numero)) return "⚠️ *Aviso:* Seu número já está na lista de lembretes.";
     await sheetUsers.addRow({ 'Numero': numero, 'Ativo': 'Sim' });
-    return "Lembretes ativados.\n\nVocê receberá notificações diárias às 09:40 para manter seus registros atualizados.";
+    return "✅ *Lembretes Ativados!*\n\nVocê receberá notificações diárias às 09:40 para não esquecer de registrar nada.";
 }
 
 async function cadastrarNovoFixo(dados) {
@@ -70,38 +88,27 @@ async function cadastrarNovoFixo(dados) {
     return true;
 }
 
-// ✅ FUNÇÃO VERIFICADA: ESTÁ AQUI
 async function lancarGastosFixos(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetFixos = doc.sheetsByTitle['Fixos'];
-        if (!sheetFixos) return "Não há registro de gastos fixos para processar.";
-        
+        if (!sheetFixos) return "⚠️ Não encontrei a aba de gastos fixos.";
         const rowsFixos = await sheetFixos.getRows();
-        if (rowsFixos.length === 0) return "Sua lista de despesas fixas está vazia.";
-
+        if (rowsFixos.length === 0) return "⚠️ Sua lista de fixos está vazia.";
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const dataHoje = getDataBrasilia();
         let total = 0;
         let resumo = "";
-
         for (const row of rowsFixos) {
             const item = row.get('Item');
             const valor = row.get('Valor');
             const cat = row.get('Categoria');
-            
-            await sheetUser.addRow({
-                'Data': dataHoje, 'Categoria': cat, 'Item/Descrição': item, 'Valor': valor, 'Tipo': 'Saída'
-            });
-            
+            await sheetUser.addRow({ 'Data': dataHoje, 'Categoria': cat, 'Item/Descrição': item, 'Valor': valor, 'Tipo': 'Saída' });
             total += parseFloat(valor.replace('R$', '').replace(',', '.'));
-            resumo += `- ${item}: R$ ${valor}\n`;
+            resumo += `▪️ ${item}: R$ ${valor}\n`;
         }
-        return `Processamento concluído.\n\n*Resumo dos Lançamentos:*\n${resumo}\nTotal Debitado: R$ ${total.toFixed(2)}`;
-    } catch (e) { 
-        console.error(e);
-        return "Erro ao processar os gastos fixos. Verifique a planilha."; 
-    }
+        return `✅ *Lançamento Mensal Concluído*\n\n${resumo}\n💰 *Total:* R$ ${total.toFixed(2)}`;
+    } catch (e) { return "❌ Erro ao lançar fixos."; }
 }
 
 async function adicionarNaPlanilha(dados, numeroUsuario) {
@@ -128,7 +135,7 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
                 totalGastoMes += parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
             }
         });
-        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n⚠️ *Atenção:* O limite de gastos para ${categoria} foi excedido.`;
+        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *ALERTA:* Você estourou o limite de ${categoria}!`;
         return "";
     } catch (e) { return ""; }
 }
@@ -169,5 +176,5 @@ async function getUsuariosAtivos() {
 
 module.exports = { 
     getDoc, getSheetParaUsuario, getCategoriasPermitidas, criarNovaCategoria, inscreverUsuario, 
-    adicionarNaPlanilha, cadastrarNovoFixo, lancarGastosFixos, verificarMeta, gerarGraficoPizza, getUsuariosAtivos 
+    adicionarNaPlanilha, cadastrarNovoFixo, lancarGastosFixos, verificarMeta, gerarGraficoPizza, getUsuariosAtivos, verificarUsuarioNovo 
 };
