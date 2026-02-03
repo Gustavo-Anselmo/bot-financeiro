@@ -121,7 +121,7 @@ async function inscreverUsuario(numero) {
         if (!sheetUsers) {
             sheetUsers = await doc.addSheet({
                 title: 'Usuarios',
-                headerValues: ['Numero', 'Ativo', 'Data_Inscricao']
+                headerValues: ['Numero', 'Ativo', 'Alertas_Meta', 'Data_Inscricao']
             });
         }
 
@@ -132,15 +132,18 @@ async function inscreverUsuario(numero) {
             return "⚠️ *Você já está inscrito!*\n\nSeus lembretes diários estão ativos.";
         }
 
+        // ✅ NOVO: Alertas de meta desativados por padrão
         await sheetUsers.addRow({
             'Numero': numero,
             'Ativo': 'Sim',
+            'Alertas_Meta': 'Não',
             'Data_Inscricao': getDataBrasilia()
         });
 
         return "🔔 *Lembretes Ativados!*\n\n" +
                "Você receberá notificações diárias às 09:40 " +
-               "para manter seu controle financeiro impecável. 📊";
+               "para manter seu controle financeiro impecável. 📊\n\n" +
+               "💡 *Dica:* Digite 'Ativar alertas' para ser notificado quando ultrapassar metas de gastos.";
 
     } catch (error) {
         console.error('[SHEETS] Erro ao inscrever usuário:', error.message);
@@ -167,6 +170,126 @@ async function getUsuariosAtivos() {
     } catch (error) {
         console.error('[SHEETS] Erro ao buscar usuários ativos:', error.message);
         return [];
+    }
+}
+
+// ═══════════════════════════════════════════════════════
+// 🔔 GESTÃO DE ALERTAS DE META (NOVO)
+// ═══════════════════════════════════════════════════════
+
+/**
+ * ✅ NOVO: Ativa alertas de meta para um usuário
+ * @param {string} numero - Número do WhatsApp
+ * @returns {Promise<string>} Mensagem de confirmação
+ */
+async function ativarAlertasMeta(numero) {
+    try {
+        const doc = await getDoc();
+        let sheetUsers = doc.sheetsByTitle['Usuarios'];
+
+        if (!sheetUsers) {
+            sheetUsers = await doc.addSheet({
+                title: 'Usuarios',
+                headerValues: ['Numero', 'Ativo', 'Alertas_Meta', 'Data_Inscricao']
+            });
+        }
+
+        const rows = await sheetUsers.getRows();
+        let userRow = rows.find(row => row.get('Numero') === numero);
+
+        if (!userRow) {
+            // Cria usuário se não existir
+            await sheetUsers.addRow({
+                'Numero': numero,
+                'Ativo': 'Não',
+                'Alertas_Meta': 'Sim',
+                'Data_Inscricao': getDataBrasilia()
+            });
+            return "✅ *Alertas de Meta Ativados!*\n\n" +
+                   "Você será notificado quando seus gastos ultrapassarem os limites das categorias.\n\n" +
+                   "💡 *Dica:* Use 'Desativar alertas' para pausar as notificações.";
+        }
+
+        // Atualiza usuário existente
+        if (userRow.get('Alertas_Meta') === 'Sim') {
+            return "⚠️ *Alertas já ativados!*\n\n" +
+                   "Você já está recebendo notificações quando ultrapassar metas.";
+        }
+
+        userRow.set('Alertas_Meta', 'Sim');
+        await userRow.save();
+
+        return "✅ *Alertas de Meta Ativados!*\n\n" +
+               "Você será notificado quando seus gastos ultrapassarem os limites das categorias.\n\n" +
+               "💡 *Dica:* Use 'Desativar alertas' para pausar as notificações.";
+
+    } catch (error) {
+        console.error('[SHEETS] Erro ao ativar alertas:', error.message);
+        return "❌ Erro ao ativar alertas. Tente novamente.";
+    }
+}
+
+/**
+ * ✅ NOVO: Desativa alertas de meta para um usuário
+ * @param {string} numero - Número do WhatsApp
+ * @returns {Promise<string>} Mensagem de confirmação
+ */
+async function desativarAlertasMeta(numero) {
+    try {
+        const doc = await getDoc();
+        const sheetUsers = doc.sheetsByTitle['Usuarios'];
+
+        if (!sheetUsers) {
+            return "⚠️ Você ainda não está cadastrado no sistema.";
+        }
+
+        const rows = await sheetUsers.getRows();
+        const userRow = rows.find(row => row.get('Numero') === numero);
+
+        if (!userRow) {
+            return "⚠️ Você ainda não está cadastrado no sistema.";
+        }
+
+        if (userRow.get('Alertas_Meta') === 'Não') {
+            return "⚠️ *Alertas já desativados!*\n\n" +
+                   "Você não está recebendo notificações de meta.";
+        }
+
+        userRow.set('Alertas_Meta', 'Não');
+        await userRow.save();
+
+        return "✅ *Alertas de Meta Desativados!*\n\n" +
+               "Você não receberá mais notificações ao ultrapassar limites.\n\n" +
+               "💡 *Dica:* Use 'Ativar alertas' quando quiser voltar a receber.";
+
+    } catch (error) {
+        console.error('[SHEETS] Erro ao desativar alertas:', error.message);
+        return "❌ Erro ao desativar alertas. Tente novamente.";
+    }
+}
+
+/**
+ * ✅ NOVO: Verifica se o usuário tem alertas de meta ativados
+ * @param {string} numero - Número do WhatsApp
+ * @returns {Promise<boolean>}
+ */
+async function usuarioQuerAlertas(numero) {
+    try {
+        const doc = await getDoc();
+        const sheetUsers = doc.sheetsByTitle['Usuarios'];
+
+        if (!sheetUsers) return false;
+
+        const rows = await sheetUsers.getRows();
+        const userRow = rows.find(row => row.get('Numero') === numero);
+
+        if (!userRow) return false;
+
+        return userRow.get('Alertas_Meta') === 'Sim';
+
+    } catch (error) {
+        console.error('[SHEETS] Erro ao verificar alertas:', error.message);
+        return false;
     }
 }
 
@@ -278,7 +401,7 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
 }
 
 /**
- * Verifica se o gasto ultrapassou a meta da categoria
+ * ✅ MELHORADO: Verifica se o gasto ultrapassou a meta (somente se usuário ativou alertas)
  * @param {string} categoria - Nome da categoria
  * @param {string} valorNovo - Valor do novo gasto
  * @param {string} numeroUsuario - Número do WhatsApp
@@ -286,6 +409,14 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
  */
 async function verificarMeta(categoria, valorNovo, numeroUsuario) {
     try {
+        // ✅ NOVO: Verifica se o usuário quer alertas ANTES de processar
+        const querAlertas = await usuarioQuerAlertas(numeroUsuario);
+        
+        if (!querAlertas) {
+            console.log(`[META] Usuário ${numeroUsuario} não quer alertas - pulando verificação`);
+            return ""; // Retorna vazio, sem alerta
+        }
+
         const doc = await getDoc();
         const sheetMetas = doc.sheetsByTitle['Metas'];
 
@@ -313,7 +444,7 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
             const catRow = row.get('Categoria');
             const tipoRow = row.get('Tipo');
 
-            if (dataRow.includes(mesAtual) &&
+            if (dataRow && dataRow.includes(mesAtual) &&
                 catRow.toLowerCase().trim() === categoria.toLowerCase().trim() &&
                 tipoRow === 'Saída') {
                 const valor = parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
@@ -327,15 +458,8 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
             const percentual = ((novoTotal / limite) * 100).toFixed(0);
             return `\n\n🚨 *ALERTA DE META*\n` +
                    `Você ultrapassou o limite de *${categoria}*!\n` +
-                   `📊 Gasto atual: ${formatarValorBRL(novoTotal)} (${percentual}% do limite)`;
-        }
-
-        // Alerta preventivo aos 80%
-        if (novoTotal > limite * 0.8 && totalGastoMes <= limite * 0.8) {
-            const percentual = ((novoTotal / limite) * 100).toFixed(0);
-            return `\n\n⚠️ *Atenção*\n` +
-                   `Você já gastou ${percentual}% do limite de *${categoria}*.\n` +
-                   `Fique atento! 👀`;
+                   `📊 Gasto atual: ${formatarValorBRL(novoTotal)} (${percentual}% do limite)\n\n` +
+                   `💡 Use 'Desativar alertas' para parar de receber notificações.`;
         }
 
         return "";
@@ -346,16 +470,12 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
     }
 }
 
-// ═══════════════════════════════════════════════════════
-// ✏️ EDIÇÃO E EXCLUSÃO
-// ═══════════════════════════════════════════════════════
-
 /**
- * Edita o valor de um gasto específico
+ * Edita o último gasto de um item específico
  * @param {string} nomeItem - Nome do item ou "ULTIMO"
  * @param {string} novoValor - Novo valor
  * @param {string} numeroUsuario - Número do WhatsApp
- * @returns {Promise<object|false>} Objeto com dados da edição ou false
+ * @returns {Promise<object|false>} Objeto com dados ou false
  */
 async function editarUltimoGasto(nomeItem, novoValor, numeroUsuario) {
     try {
@@ -369,7 +489,6 @@ async function editarUltimoGasto(nomeItem, novoValor, numeroUsuario) {
         if (nomeItem === 'ULTIMO') {
             rowToEdit = rows[rows.length - 1];
         } else {
-            // Busca reversa (do mais recente ao mais antigo)
             rowToEdit = rows.reverse().find(r => {
                 const itemNome = r.get('Item/Descrição');
                 return itemNome && itemNome.toLowerCase().includes(nomeItem.toLowerCase());
@@ -623,6 +742,9 @@ module.exports = {
     verificarUsuarioNovo,
     inscreverUsuario,
     getUsuariosAtivos,
+    ativarAlertasMeta,
+    desativarAlertasMeta,
+    usuarioQuerAlertas,
     getCategoriasPermitidas,
     criarNovaCategoria,
     adicionarNaPlanilha,

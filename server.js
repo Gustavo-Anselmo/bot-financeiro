@@ -11,7 +11,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const MY_TOKEN = process.env.MY_TOKEN;
 
-// 📋 MENU PREMIUM V14.0
+// 📋 MENU PREMIUM V15.0 - MELHORADO
 const MENU_AJUDA = `👋 *Olá! Sou seu Assistente Financeiro.*
 
 Estou aqui para organizar seu dinheiro de forma simples e inteligente.
@@ -41,9 +41,17 @@ _"Gerar gráfico"_
 _"Resumo do mês"_
 _"Quanto gastei em alimentação?"_
 
+🔔 *6. Alertas de Meta (Opcional)*
+_"Ativar alertas"_ - Recebe aviso ao ultrapassar limites
+_"Desativar alertas"_ - Controla sem notificações
+
 💡 *Dica:* Digite _"Ativar lembretes"_ para receber notificações diárias às 09:40.
 
 Como quer começar? 😊`;
+
+// 🗂️ ARMAZENAMENTO TEMPORÁRIO DE REGISTROS PENDENTES
+// Usado quando o usuário recusa criar categoria e queremos salvar em "Outros"
+const registrosPendentes = new Map();
 
 // ⏰ CRON JOB - LEMBRETES DIÁRIOS
 cron.schedule('40 09 * * 1-5', async () => {
@@ -116,6 +124,7 @@ app.post('/webhook', async (req, res) => {
             const idBotao = message.interactive.button_reply.id;
             console.log(`[BOTÃO] Ação: ${idBotao}`);
 
+            // ✅ CRIAR CATEGORIA E PROCESSAR REGISTRO PENDENTE
             if (idBotao.startsWith('CRIAR_')) {
                 const nomeCategoria = idBotao.replace('CRIAR_', '');
                 await sendMessage(from, `🔄 Criando categoria *${nomeCategoria}*...`);
@@ -123,13 +132,39 @@ app.post('/webhook', async (req, res) => {
                 const criou = await sheets.criarNovaCategoria(nomeCategoria);
                 
                 if (criou) {
-                    await sendMessage(from, `✅ *Categoria Criada!*\n\nAgora você pode usar *${nomeCategoria}* nos seus registros.`);
+                    await sendMessage(from, `✅ *Categoria ${nomeCategoria} criada com sucesso!*`);
+                    
+                    // ✅ NOVO: Processa o registro pendente
+                    const pendente = registrosPendentes.get(from);
+                    if (pendente) {
+                        console.log('[PENDENTE] Processando registro que estava aguardando:', pendente);
+                        
+                        // Atualiza categoria para a recém-criada
+                        pendente.dados.categoria = nomeCategoria;
+                        
+                        await processarRegistro(pendente, from);
+                        registrosPendentes.delete(from);
+                    }
                 } else {
                     await sendMessage(from, `⚠️ A categoria *${nomeCategoria}* já existe na sua planilha.`);
                 }
             } 
+            // ❌ CANCELAR CRIAÇÃO - SALVA EM "OUTROS"
             else if (idBotao === 'CANCELAR_CRIACAO') {
-                await sendMessage(from, "❌ *Operação Cancelada.*\n\nVocê pode registrar o gasto manualmente ou escolher outra categoria.");
+                const pendente = registrosPendentes.get(from);
+                
+                if (pendente && pendente.dados) {
+                    console.log('[CANCELAR] Salvando em "Outros":', pendente.dados);
+                    
+                    // ✅ NOVO: Salva na categoria "Outros" ao invés de cancelar
+                    pendente.dados.categoria = "Outros";
+                    
+                    await sendMessage(from, "📝 Tudo bem! Salvando em *Outros*...");
+                    await processarRegistro(pendente, from);
+                    registrosPendentes.delete(from);
+                } else {
+                    await sendMessage(from, "❌ *Operação Cancelada.*");
+                }
             }
             else if (idBotao.startsWith('CONFIRMAR_REGISTRO_')) {
                 // Futura funcionalidade: confirmar registros pendentes
@@ -209,9 +244,11 @@ app.post('/webhook', async (req, res) => {
             // ─────────────────────────────────────────────────────
             // 📍 COMANDOS DIRETOS (sem passar pela IA)
             // ─────────────────────────────────────────────────────
-            const gatilhosMenu = /^(ajuda|menu|inicio|iniciar|oi|ola|oie|help)$/i;
+            const gatilhosMenu = /^(ajuda|menu|inicio|iniciar|oi|ola|oie|help|oii)$/i;
             const gatilhosLembretes = /(ativar|ligar|quer) *(lembrete|notifica)/i;
             const gatilhosFixos = /(lancar|processar|adicionar) *fixos?/i;
+            const gatilhosAlertasAtivar = /(ativar|ligar|quero) *(alerta|meta)/i;
+            const gatilhosAlertasDesativar = /(desativar|desligar|nao quero|não quero) *(alerta|meta)/i;
 
             if (gatilhosMenu.test(txtNormalizado)) {
                 await sendMessage(from, MENU_AJUDA);
@@ -219,136 +256,102 @@ app.post('/webhook', async (req, res) => {
             }
 
             if (gatilhosLembretes.test(txtNormalizado)) {
-                const resultado = await sheets.inscreverUsuario(from);
-                await sendMessage(from, resultado);
+                const msg = await sheets.inscreverUsuario(from);
+                await sendMessage(from, msg);
+                return res.sendStatus(200);
+            }
+
+            // ✅ NOVO: Gerenciar alertas de meta
+            if (gatilhosAlertasAtivar.test(txtNormalizado)) {
+                const msg = await sheets.ativarAlertasMeta(from);
+                await sendMessage(from, msg);
+                return res.sendStatus(200);
+            }
+
+            if (gatilhosAlertasDesativar.test(txtNormalizado)) {
+                const msg = await sheets.desativarAlertasMeta(from);
+                await sendMessage(from, msg);
                 return res.sendStatus(200);
             }
 
             if (gatilhosFixos.test(txtNormalizado)) {
-                await sendMessage(from, "🔄 *Processando seus gastos fixos...*");
-                const resultado = await sheets.lancarGastosFixos(from);
-                await sendMessage(from, resultado);
+                const msg = await sheets.lancarGastosFixos(from);
+                await sendMessage(from, msg);
                 return res.sendStatus(200);
             }
 
             // ─────────────────────────────────────────────────────
-            // 🧠 CONSULTA À IA COM CONTEXTO RICO
+            // 🧠 CHAMADA DA IA
             // ─────────────────────────────────────────────────────
             const categorias = await sheets.getCategoriasPermitidas();
-            
+            const dataHoje = getDataBrasilia();
+
             const promptCompleto = `
-╔════════════════════════════════════════════════════╗
-  CONTEXTO DO USUÁRIO
-╚════════════════════════════════════════════════════╝
+Data de hoje: ${dataHoje}
+Categorias disponíveis: ${categorias}
 
-📅 Data Atual: ${getDataBrasilia()}
-📂 Categorias Existentes: [${categorias}]
-💬 Mensagem do Usuário: "${textoParaIA}"
+Mensagem do usuário: "${textoParaIA}"
 
-╔════════════════════════════════════════════════════╗
-  SUA MISSÃO
-╚════════════════════════════════════════════════════╝
-
-Analise a mensagem e retorne a ação apropriada em JSON puro.
-
-🔍 DECISÕES:
-
-1️⃣ É um GASTO ou RECEITA comum?
-   → REGISTRAR (use uma categoria da lista)
-
-2️⃣ É um gasto que NÃO se encaixa nas categorias?
-   → SUGERIR_CRIACAO (crie nome curto e claro)
-
-3️⃣ Quer CORRIGIR valor anterior?
-   → EDITAR (busque o item mencionado)
-
-4️⃣ Quer APAGAR registro?
-   → EXCLUIR (busque o item ou use "ULTIMO")
-
-5️⃣ Quer SALVAR conta recorrente?
-   → CADASTRAR_FIXO (valide categoria)
-
-6️⃣ Quer VER dados (gráfico, resumo)?
-   → CONSULTAR
-
-7️⃣ É conversa fora do escopo financeiro?
-   → CONVERSAR (recuse educadamente)
-
-╔════════════════════════════════════════════════════╗
-  EXEMPLOS PARA GUIAR
-╚════════════════════════════════════════════════════╝
-
-"Gastei 50 no mercado"
-→ {"acao": "REGISTRAR", "dados": {"data": "${getDataBrasilia()}", "categoria": "Alimentação", "item": "Mercado", "valor": "50.00", "tipo": "Saída"}}
-
-"Comprei ração pro cachorro" (sem categoria "Pets")
-→ {"acao": "SUGERIR_CRIACAO", "dados": {"sugestao": "Pets", "item_original": "Ração pro cachorro", "valor_pendente": "0.00", "data_pendente": "${getDataBrasilia()}"}}
-
-"Mudar o Uber pra 25"
-→ {"acao": "EDITAR", "dados": {"item": "Uber", "novo_valor": "25.00"}}
-
-"Apagar o último"
-→ {"acao": "EXCLUIR", "dados": {"item": "ULTIMO"}}
-
-"Gerar gráfico"
-→ {"acao": "CONSULTAR", "tipo": "grafico"}
-
-"Me conta uma piada"
-→ {"acao": "CONVERSAR", "resposta": "Sou focado em finanças! Que tal registrar um gasto? 😊"}
-
-╔════════════════════════════════════════════════════╗
-  RETORNE APENAS O JSON
-╚════════════════════════════════════════════════════╝
+IMPORTANTE: Se o usuário está perguntando sobre suas funções, habilidades ou o que você faz, responda de forma conversacional e amigável descrevendo suas capacidades. Use a ação CONVERSAR com uma resposta completa e empolgante!
 `;
 
             console.log('[IA] Enviando para Groq...');
             const respostaIA = await perguntarParaGroq(promptCompleto);
+            
+            // ✅ VALIDAÇÃO MELHORADA DO JSON
             ia = limparEConverterJSON(respostaIA);
-
-            if (!ia) {
-                console.error('[IA] Falha ao converter JSON:', respostaIA);
+            
+            if (!ia || !ia.acao) {
+                console.error('[IA] JSON inválido recebido:', respostaIA.substring(0, 200));
                 await sendMessage(
                     from,
-                    "😵 *Ops!* Tive um problema para processar.\n\n" +
-                    "Pode reformular sua mensagem de forma mais clara?"
+                    "🤔 *Não entendi bem.*\n\n" +
+                    "Pode reformular? Ou digite *ajuda* para ver exemplos."
                 );
                 return res.sendStatus(200);
             }
         }
 
         // ═══════════════════════════════════════════════════════
-        // 📤 EXECUÇÃO DAS AÇÕES E RESPOSTAS
+        // 🎯 EXECUÇÃO DAS AÇÕES
         // ═══════════════════════════════════════════════════════
         if (ia && ia.acao) {
-            console.log(`[AÇÃO] ${ia.acao}`);
+            console.log(`[AÇÃO] Executando: ${ia.acao}`);
 
             switch (ia.acao) {
-                case "REGISTRAR":
+                case 'REGISTRAR':
                     await processarRegistro(ia, from);
                     break;
 
-                case "SUGERIR_CRIACAO":
+                case 'SUGERIR_CRIACAO':
+                    // ✅ NOVO: Armazena o registro pendente
+                    registrosPendentes.set(from, ia);
                     await processarSugestaoCategoria(ia, from);
                     break;
 
-                case "EDITAR":
+                case 'EDITAR':
                     await processarEdicao(ia, from);
                     break;
 
-                case "EXCLUIR":
+                case 'EXCLUIR':
                     await processarExclusao(ia, from);
                     break;
 
-                case "CADASTRAR_FIXO":
+                case 'CADASTRAR_FIXO':
                     await processarCadastroFixo(ia, from);
                     break;
 
-                case "CONSULTAR":
+                case 'CONSULTAR':
                     await processarConsulta(ia, from, textoParaIA);
                     break;
 
-                case "CONVERSAR":
-                    await sendMessage(from, ia.resposta || "Desculpe, não entendi. Digite *ajuda* para ver o que posso fazer.");
+                case 'CONVERSAR':
+                    // ✅ MELHORADO: Resposta mais natural
+                    if (ia.resposta) {
+                        await sendMessage(from, ia.resposta);
+                    } else {
+                        await sendMessage(from, "🤔 Não entendi. Digite *ajuda* para ver o que posso fazer!");
+                    }
                     break;
 
                 default:
@@ -391,19 +394,23 @@ async function processarRegistro(ia, from) {
         const salvou = await sheets.adicionarNaPlanilha(ia.dados, from);
 
         if (salvou) {
+            // ✅ MELHORADO: Verifica se o usuário quer alertas
             const alerta = await sheets.verificarMeta(ia.dados.categoria, ia.dados.valor, from);
 
-            // Resposta formatada estilo "recibo"
+            // ✅ MELHORADO: Formatação mais limpa
             const emoji = ia.dados.tipo === "Entrada" ? "💰" : "💸";
-            await sendMessage(
-                from,
-                `✅ *Registro Confirmado*\n\n` +
+            let mensagem = `✅ *Registro Confirmado*\n\n` +
                 `${emoji} *${ia.dados.item}*\n` +
                 `💵 Valor: *R$ ${ia.dados.valor}*\n` +
                 `📂 Categoria: ${ia.dados.categoria}\n` +
-                `📅 Data: ${ia.dados.data}` +
-                alerta
-            );
+                `📅 Data: ${ia.dados.data}`;
+            
+            // Só adiciona alerta se existir
+            if (alerta) {
+                mensagem += alerta;
+            }
+            
+            await sendMessage(from, mensagem);
         } else {
             await sendMessage(from, "❌ *Erro ao salvar.*\n\nTente novamente.");
         }
@@ -416,11 +423,13 @@ async function processarRegistro(ia, from) {
 async function processarSugestaoCategoria(ia, from) {
     try {
         const sugestao = ia.dados.sugestao;
+        
+        // ✅ MELHORADO: Mensagem mais clara
         await sendButtonMessage(
             from,
-            `🤔 *Categoria Inexistente*\n\n` +
-            `O item *"${ia.dados.item_original}"* não se encaixa nas suas categorias atuais.\n\n` +
-            `Deseja criar a categoria *${sugestao}*?`,
+            `🤔 *Categoria inexistente para "${ia.dados.item_original}"*.\n\n` +
+            `Deseja criar *${sugestao}*?\n\n` +
+            `Se escolher "Não", salvarei em *Outros*.`,
             [
                 { id: `CRIAR_${sugestao}`, title: '✅ Sim, Criar' },
                 { id: 'CANCELAR_CRIACAO', title: '❌ Não' }
@@ -566,7 +575,7 @@ Seja objetivo e dê insights úteis.
 // ═══════════════════════════════════════════════════════
 app.listen(PORT, () => {
     console.log('════════════════════════════════════════════════');
-    console.log(`  🤖 Bot Financeiro V14.0 - ONLINE`);
+    console.log(`  🤖 Bot Financeiro V15.0 - ONLINE`);
     console.log(`  🌐 Porta: ${PORT}`);
     console.log(`  📅 Inicializado: ${new Date().toLocaleString('pt-BR')}`);
     console.log('════════════════════════════════════════════════');
