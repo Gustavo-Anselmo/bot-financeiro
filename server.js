@@ -132,12 +132,12 @@ app.post('/webhook', async (req, res) => {
                 const criou = await sheets.criarNovaCategoria(nomeCategoria);
                 
                 if (criou) {
-                    await sendMessage(from, `✅ *Categoria ${nomeCategoria} criada com sucesso!*`);
+                    await sendMessage(from, `✅ *Categoria ${nomeCategoria} criada!*`);
                     
-                    // ✅ NOVO: Processa o registro pendente
+                    // ✅ Processa o registro pendente com a nova categoria
                     const pendente = registrosPendentes.get(from);
                     if (pendente) {
-                        console.log('[PENDENTE] Processando registro que estava aguardando:', pendente);
+                        console.log('[PENDENTE] Processando registro com nova categoria:', pendente);
                         
                         // Atualiza categoria para a recém-criada
                         pendente.dados.categoria = nomeCategoria;
@@ -149,21 +149,25 @@ app.post('/webhook', async (req, res) => {
                     await sendMessage(from, `⚠️ A categoria *${nomeCategoria}* já existe na sua planilha.`);
                 }
             } 
-            // ❌ CANCELAR CRIAÇÃO - SALVA EM "OUTROS"
+            // ✅ CORRIGIDO: CANCELAR CRIAÇÃO - SALVA EM "OUTROS"
             else if (idBotao === 'CANCELAR_CRIACAO') {
                 const pendente = registrosPendentes.get(from);
                 
                 if (pendente && pendente.dados) {
                     console.log('[CANCELAR] Salvando em "Outros":', pendente.dados);
                     
-                    // ✅ NOVO: Salva na categoria "Outros" ao invés de cancelar
+                    // ✅ CORREÇÃO PRINCIPAL: Salva em "Outros" ao invés de cancelar
                     pendente.dados.categoria = "Outros";
                     
-                    await sendMessage(from, "📝 Tudo bem! Salvando em *Outros*...");
+                    await sendMessage(from, "📝 Ok! Salvando em *Outros*...");
                     await processarRegistro(pendente, from);
                     registrosPendentes.delete(from);
                 } else {
-                    await sendMessage(from, "❌ *Operação Cancelada.*");
+                    await sendMessage(
+                        from, 
+                        "❌ *Operação Cancelada.*\n\n" +
+                        "Não encontrei registro pendente. Tente registrar novamente."
+                    );
                 }
             }
             else if (idBotao.startsWith('CONFIRMAR_REGISTRO_')) {
@@ -219,8 +223,8 @@ app.post('/webhook', async (req, res) => {
                     "⚠️ *Não consegui entender o áudio.*\n\n" +
                     "Pode tentar:\n" +
                     "• Falar mais devagar\n" +
-                    "• Gravar em ambiente mais silencioso\n" +
-                    "• Enviar como texto"
+                    "• Enviar como texto\n" +
+                    "• Gravar novamente"
                 );
                 return res.sendStatus(200);
             }
@@ -229,80 +233,77 @@ app.post('/webhook', async (req, res) => {
             textoParaIA = message.text.body;
         } 
         else {
-            // Tipo não suportado
-            await sendMessage(from, "⚠️ Tipo de mensagem não suportado. Envie texto, áudio ou imagem.");
+            await sendMessage(
+                from,
+                "⚠️ *Tipo de mensagem não suportado.*\n\n" +
+                "Envie: texto, áudio ou imagem."
+            );
             return res.sendStatus(200);
         }
 
         // ═══════════════════════════════════════════════════════
-        // 🤖 PROCESSAMENTO DE COMANDOS E IA
+        // 🧠 PROCESSAMENTO INTELIGENTE (IA)
         // ═══════════════════════════════════════════════════════
-        if (textoParaIA && !ia) {
-            const txtNormalizado = normalizarTexto(textoParaIA);
-            console.log(`[TEXTO] Recebido: "${textoParaIA}"`);
+        
+        // Se não temos ia ainda (de imagem), processa o texto
+        if (!ia && textoParaIA) {
+            console.log(`[IA] Enviando para processamento: "${textoParaIA.substring(0, 100)}"`);
 
-            // ─────────────────────────────────────────────────────
-            // 📍 COMANDOS DIRETOS (sem passar pela IA)
-            // ─────────────────────────────────────────────────────
-            const gatilhosMenu = /^(ajuda|menu|inicio|iniciar|oi|ola|oie|help|oii)$/i;
-            const gatilhosLembretes = /(ativar|ligar|quer) *(lembrete|notifica)/i;
-            const gatilhosFixos = /(lancar|processar|adicionar) *fixos?/i;
-            const gatilhosAlertasAtivar = /(ativar|ligar|quero) *(alerta|meta)/i;
-            const gatilhosAlertasDesativar = /(desativar|desligar|nao quero|não quero) *(alerta|meta)/i;
+            // Comandos hardcoded para otimização
+            const txtLower = textoParaIA.toLowerCase();
 
-            if (gatilhosMenu.test(txtNormalizado)) {
+            // Menu / Ajuda
+            if (txtLower.match(/\b(ajuda|menu|help|inicio|começar)\b/)) {
                 await sendMessage(from, MENU_AJUDA);
                 return res.sendStatus(200);
             }
 
-            if (gatilhosLembretes.test(txtNormalizado)) {
+            // Ativar Lembretes
+            if (txtLower.includes('ativar lembrete')) {
                 const msg = await sheets.inscreverUsuario(from);
                 await sendMessage(from, msg);
                 return res.sendStatus(200);
             }
 
-            // ✅ NOVO: Gerenciar alertas de meta
-            if (gatilhosAlertasAtivar.test(txtNormalizado)) {
+            // Ativar Alertas de Meta
+            if (txtLower.includes('ativar alerta')) {
                 const msg = await sheets.ativarAlertasMeta(from);
                 await sendMessage(from, msg);
                 return res.sendStatus(200);
             }
 
-            if (gatilhosAlertasDesativar.test(txtNormalizado)) {
+            // Desativar Alertas de Meta
+            if (txtLower.includes('desativar alerta')) {
                 const msg = await sheets.desativarAlertasMeta(from);
                 await sendMessage(from, msg);
                 return res.sendStatus(200);
             }
 
-            if (gatilhosFixos.test(txtNormalizado)) {
+            // Lançar Fixos
+            if (txtLower.match(/\blan[çc]ar fixo/)) {
                 const msg = await sheets.lancarGastosFixos(from);
                 await sendMessage(from, msg);
                 return res.sendStatus(200);
             }
 
-            // ─────────────────────────────────────────────────────
-            // 🧠 CHAMADA DA IA
-            // ─────────────────────────────────────────────────────
-            const categorias = await sheets.getCategoriasPermitidas();
-            const dataHoje = getDataBrasilia();
+            // ✅ Busca categorias permitidas
+            const categoriasPermitidas = await sheets.getCategoriasPermitidas();
+            const dataAtual = getDataBrasilia();
 
             const promptCompleto = `
-Data de hoje: ${dataHoje}
-Categorias disponíveis: ${categorias}
+Data de hoje: ${dataAtual}
+Categorias existentes: ${categoriasPermitidas.join(', ')}
 
 Mensagem do usuário: "${textoParaIA}"
 
-IMPORTANTE: Se o usuário está perguntando sobre suas funções, habilidades ou o que você faz, responda de forma conversacional e amigável descrevendo suas capacidades. Use a ação CONVERSAR com uma resposta completa e empolgante!
+Analise e retorne JSON conforme instruções do system prompt.
 `;
 
-            console.log('[IA] Enviando para Groq...');
             const respostaIA = await perguntarParaGroq(promptCompleto);
-            
-            // ✅ VALIDAÇÃO MELHORADA DO JSON
             ia = limparEConverterJSON(respostaIA);
-            
-            if (!ia || !ia.acao) {
-                console.error('[IA] JSON inválido recebido:', respostaIA.substring(0, 200));
+
+            if (!ia) {
+                console.warn('[IA] Resposta inválida recebida:', respostaIA);
                 await sendMessage(
                     from,
                     "🤔 *Não entendi bem.*\n\n" +
@@ -313,57 +314,47 @@ IMPORTANTE: Se o usuário está perguntando sobre suas funções, habilidades ou
         }
 
         // ═══════════════════════════════════════════════════════
-        // 🎯 EXECUÇÃO DAS AÇÕES
+        // 🎯 ROTEAMENTO DE AÇÕES
         // ═══════════════════════════════════════════════════════
-        if (ia && ia.acao) {
-            console.log(`[AÇÃO] Executando: ${ia.acao}`);
+        console.log(`[AÇÃO] ${ia.acao}`, ia.dados || ia.resposta?.substring(0, 50));
 
-            switch (ia.acao) {
-                case 'REGISTRAR':
-                    await processarRegistro(ia, from);
-                    break;
+        switch (ia.acao) {
+            case 'REGISTRAR':
+                await processarRegistro(ia, from);
+                break;
 
-                case 'SUGERIR_CRIACAO':
-                    // ✅ NOVO: Armazena o registro pendente
-                    registrosPendentes.set(from, ia);
-                    await processarSugestaoCategoria(ia, from);
-                    break;
+            case 'SUGERIR_CRIACAO':
+                // ✅ CORREÇÃO: Armazena registro pendente ANTES de perguntar
+                registrosPendentes.set(from, ia);
+                await processarSugestaoCategoria(ia, from);
+                break;
 
-                case 'EDITAR':
-                    await processarEdicao(ia, from);
-                    break;
+            case 'EDITAR':
+                await processarEdicao(ia, from);
+                break;
 
-                case 'EXCLUIR':
-                    await processarExclusao(ia, from);
-                    break;
+            case 'EXCLUIR':
+                await processarExclusao(ia, from);
+                break;
 
-                case 'CADASTRAR_FIXO':
-                    await processarCadastroFixo(ia, from);
-                    break;
+            case 'CADASTRAR_FIXO':
+                await processarCadastroFixo(ia, from);
+                break;
 
-                case 'CONSULTAR':
-                    await processarConsulta(ia, from, textoParaIA);
-                    break;
+            case 'CONSULTAR':
+                await processarConsulta(ia, from, textoParaIA);
+                break;
 
-                case 'CONVERSAR':
-                    // ✅ MELHORADO: Resposta mais natural
-                    if (ia.resposta) {
-                        await sendMessage(from, ia.resposta);
-                    } else {
-                        await sendMessage(from, "🤔 Não entendi. Digite *ajuda* para ver o que posso fazer!");
-                    }
-                    break;
+            case 'CONVERSAR':
+                await sendMessage(from, ia.resposta || "👋 Olá! Como posso ajudar?");
+                break;
 
-                default:
-                    await sendMessage(from, "⚠️ Ação não reconhecida. Digite *ajuda* para ver comandos.");
-            }
-        } else {
-            // Fallback se nada foi processado
-            await sendMessage(
-                from,
-                "🤔 *Não entendi bem.*\n\n" +
-                "Pode reformular? Ou digite *ajuda* para ver exemplos."
-            );
+            default:
+                await sendMessage(
+                    from,
+                    "🤔 *Não entendi bem.*\n\n" +
+                    "Pode reformular? Ou digite *ajuda* para ver exemplos."
+                );
         }
 
     } catch (error) {
@@ -394,10 +385,10 @@ async function processarRegistro(ia, from) {
         const salvou = await sheets.adicionarNaPlanilha(ia.dados, from);
 
         if (salvou) {
-            // ✅ MELHORADO: Verifica se o usuário quer alertas
+            // ✅ Verifica se o usuário quer alertas
             const alerta = await sheets.verificarMeta(ia.dados.categoria, ia.dados.valor, from);
 
-            // ✅ MELHORADO: Formatação mais limpa
+            // ✅ Formatação mais limpa
             const emoji = ia.dados.tipo === "Entrada" ? "💰" : "💸";
             let mensagem = `✅ *Registro Confirmado*\n\n` +
                 `${emoji} *${ia.dados.item}*\n` +
@@ -424,15 +415,16 @@ async function processarSugestaoCategoria(ia, from) {
     try {
         const sugestao = ia.dados.sugestao;
         
-        // ✅ MELHORADO: Mensagem mais clara
+        // ✅ MELHORADO: Mensagem mais clara informando que "Não" salva em Outros
         await sendButtonMessage(
             from,
-            `🤔 *Categoria inexistente para "${ia.dados.item_original}"*.\n\n` +
-            `Deseja criar *${sugestao}*?\n\n` +
-            `Se escolher "Não", salvarei em *Outros*.`,
+            `🤔 *Categoria Inexistente*\n\n` +
+            `O item *"${ia.dados.item_original}"* não se encaixa nas categorias atuais.\n\n` +
+            `Deseja criar a categoria *${sugestao}*?\n\n` +
+            `_Se escolher "Não", o registro será salvo em "Outros"._`,
             [
                 { id: `CRIAR_${sugestao}`, title: '✅ Sim, Criar' },
-                { id: 'CANCELAR_CRIACAO', title: '❌ Não' }
+                { id: 'CANCELAR_CRIACAO', title: '❌ Não, usar Outros' }
             ]
         );
     } catch (error) {
@@ -575,7 +567,7 @@ Seja objetivo e dê insights úteis.
 // ═══════════════════════════════════════════════════════
 app.listen(PORT, () => {
     console.log('════════════════════════════════════════════════');
-    console.log(`  🤖 Bot Financeiro V15.0 - ONLINE`);
+    console.log(`  🤖 Bot Financeiro V15.1 - CORRIGIDO`);
     console.log(`  🌐 Porta: ${PORT}`);
     console.log(`  📅 Inicializado: ${new Date().toLocaleString('pt-BR')}`);
     console.log('════════════════════════════════════════════════');
