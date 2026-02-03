@@ -42,25 +42,6 @@ function limparEConverterJSON(texto) {
     }
 }
 
-// --- 🤖 MANUAL DE AJUDA COMPLETO ---
-function getMenuAjuda() {
-    return `🤖 *Olá! Sou seu Assistente Financeiro Inteligente.*
-
-✅ *O QUE EU JÁ FAÇO:*
-1. 📝 *Registrar:* Mande áudio ou texto (ex: "Gastei 50 no mercado").
-2. 👮‍♂️ *Policial de Metas:* Te aviso na hora se estourar o limite da categoria.
-3. 📅 *Contas Fixas:* Digite *"Lançar fixos"* para registrar boletos do mês.
-4. 🔎 *Consultas:* Pergunte "Quanto gastei hoje?" ou "Resumo do mês".
-5. 🧠 *Organização:* Categorizo tudo automaticamente (usando sua aba Metas).
-
-🚀 *FUTURAS ATUALIZAÇÕES (Em breve):*
-- 🎓 *Coach Financeiro:* Vou analisar seus hábitos e dar dicas.
-- 📊 *Gráficos:* Vou gerar imagens com gráficos direto no Zap.
-- 💳 *Cartão:* Gestão de faturas e datas de vencimento.
-
-_Versão 9.4 - Sistema Online_ ⚡`;
-}
-
 // --- 🎧 AUDIO ---
 async function transcreverAudio(mediaId) {
     try {
@@ -87,7 +68,6 @@ async function transcreverAudio(mediaId) {
         );
         return groqResponse.data.text;
     } catch (error) {
-        console.error("Erro Áudio:", error.message);
         throw new Error("Falha ao ouvir áudio.");
     }
 }
@@ -100,7 +80,7 @@ async function perguntarParaGroq(promptUsuario) {
             {
                 model: "llama-3.3-70b-versatile",
                 messages: [
-                    { role: "system", content: "Você é um assistente financeiro pessoal." },
+                    { role: "system", content: "Você é um assistente financeiro eficiente." },
                     { role: "user", content: promptUsuario }
                 ],
                 temperature: 0.3 
@@ -143,26 +123,53 @@ async function getCategoriasPermitidas() {
     } catch (e) { return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; }
 }
 
+// 🆕 FUNÇÃO QUE RESOLVE O PROBLEMA: SALVAR NA ABA CERTA
+async function cadastrarNovoFixo(dados) {
+    try {
+        const doc = await getDoc();
+        let sheetFixos = doc.sheetsByTitle['Fixos'];
+        
+        // Se a aba não existir, cria ela agora automaticamente
+        if (!sheetFixos) {
+            sheetFixos = await doc.addSheet({ title: 'Fixos', headerValues: ['Item', 'Valor', 'Categoria'] });
+        }
+
+        await sheetFixos.addRow({
+            'Item': dados.item,
+            'Valor': dados.valor,
+            'Categoria': dados.categoria
+        });
+        return true;
+    } catch (error) {
+        console.error("Erro ao salvar fixo:", error);
+        return false;
+    }
+}
+
 async function lerDadosCompletos(numeroUsuario) {
     try {
         const doc = await getDoc();
         let relatorio = "";
 
+        // Lê aba Fixos
+        const sheetFixos = doc.sheetsByTitle['Fixos'];
+        relatorio += "📌 --- CONFIGURAÇÃO DE FIXOS ---\n";
+        if (sheetFixos) {
+            const rowsFixos = await sheetFixos.getRows();
+            if (rowsFixos.length > 0) {
+                rowsFixos.forEach(row => {
+                    relatorio += `- ${row.get('Item')}: R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
+                });
+            } else { relatorio += "(Lista vazia)\n"; }
+        } else { relatorio += "(Aba não existe)\n"; }
+
+        // Lê Extrato
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const rowsUser = await sheetUser.getRows({ limit: 30, offset: 0 });
-        relatorio += "📊 --- EXTRATO RECENTE ---\n";
+        relatorio += "\n📊 --- EXTRATO RECENTE ---\n";
         if (rowsUser.length > 0) {
             rowsUser.forEach(row => {
                 relatorio += `- ${row.get('Data')}: ${row.get('Item/Descrição')} | R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
-            });
-        } else { relatorio += "(Sem gastos recentes)\n"; }
-
-        const sheetFixos = doc.sheetsByTitle['Fixos'];
-        relatorio += "\n📌 --- GASTOS FIXOS CADASTRADOS ---\n";
-        if (sheetFixos) {
-            const rowsFixos = await sheetFixos.getRows();
-            rowsFixos.forEach(row => {
-                relatorio += `- ${row.get('Item')}: R$ ${row.get('Valor')} (${row.get('Categoria')})\n`;
             });
         }
 
@@ -174,9 +181,9 @@ async function lancarGastosFixos(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetFixos = doc.sheetsByTitle['Fixos'];
-        if (!sheetFixos) return "⚠️ Aba 'Fixos' não encontrada.";
+        if (!sheetFixos) return "⚠️ Você ainda não cadastrou nenhum gasto fixo.";
         const rowsFixos = await sheetFixos.getRows();
-        if (rowsFixos.length === 0) return "⚠️ Aba 'Fixos' vazia.";
+        if (rowsFixos.length === 0) return "⚠️ Sua lista de fixos está vazia.";
 
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const dataHoje = getDataBrasilia();
@@ -234,7 +241,7 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
 }
 
 // --- ROTAS ---
-app.get('/', (req, res) => res.send('🤖 Bot V9.4 (Menu Completo) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V10.1 (Fixos OK) ONLINE!'));
 
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
@@ -264,14 +271,7 @@ app.post('/webhook', async (req, res) => {
                 if (textoParaIA) {
                     const txt = textoParaIA.toLowerCase();
 
-                    // 1. MENU AJUDA (Ativado por várias palavras)
-                    if (txt.includes('o que você faz') || txt.includes('ajuda') || txt.includes('menu') || txt.includes('funções') || txt.includes('funcões') || txt.includes('atualizações')) {
-                        await sendMessage(from, getMenuAjuda());
-                        res.sendStatus(200);
-                        return;
-                    }
-
-                    // 2. LANÇAR FIXOS
+                    // COMANDO MÁGICO: LANÇAR NO MÊS
                     if (txt.includes('lancar fixos') || txt.includes('lançar fixos')) {
                         const relatorio = await lancarGastosFixos(from);
                         await sendMessage(from, relatorio);
@@ -279,19 +279,21 @@ app.post('/webhook', async (req, res) => {
                         return;
                     }
 
-                    // 3. FLUXO NORMAL IA
                     const categoriasPermitidas = await getCategoriasPermitidas();
 
+                    // 🧠 PROMPT QUE ENSINA O BOT A DIFERENÇA
                     const promptClassificacao = `
                     Entrada: "${textoParaIA}"
                     Data: ${getDataBrasilia()}
                     Categorias permitidas: [${categoriasPermitidas}].
 
                     Classifique em UM dos JSONs:
-                    1. GASTO/GANHO: {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Uma das permitidas", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
-                    2. CONSULTA: {"acao": "CONSULTAR"}
-                    3. CONVERSA: {"acao": "CONVERSAR", "resposta": "Sua resposta"}
+                    1. REGISTRAR GASTO (Ocorreu hoje/agora): {"acao": "REGISTRAR", "dados": {"data": "DD/MM/AAAA", "categoria": "Uma das permitidas", "item": "Nome", "valor": "0.00", "tipo": "Saída/Entrada"}}
+                    2. CADASTRAR/ADICIONAR NOVO FIXO (Configuração futura): {"acao": "CADASTRAR_FIXO", "dados": {"item": "Nome da conta", "valor": "0.00", "categoria": "Uma das permitidas"}}
+                    3. CONSULTA (Perguntas, dúvidas, ver fixos): {"acao": "CONSULTAR"}
+                    4. CONVERSA: {"acao": "CONVERSAR", "resposta": "Sua resposta"}
                     
+                    Dica: Se o usuário disser "Adicione um gasto fixo", "Configure o aluguel" ou "Cadastrar conta fixa", use a opção 2 (CADASTRAR_FIXO).
                     RESPONDA APENAS O JSON.
                     `;
 
@@ -310,15 +312,26 @@ app.post('/webhook', async (req, res) => {
                         } else {
                             respostaFinal = "❌ Erro na planilha.";
                         }
-                    } 
+                    }
+                    // 👇 AQUI A SOLUÇÃO: ELE CHAMA A FUNÇÃO CERTA AGORA 👇
+                    else if (ia.acao === "CADASTRAR_FIXO") {
+                        const salvou = await cadastrarNovoFixo(ia.dados);
+                        if (salvou) {
+                            respostaFinal = `📌 *Configurado com Sucesso!* \n\nAdicionei "${ia.dados.item}" (R$ ${ia.dados.valor}) na sua lista de gastos fixos.`;
+                        } else {
+                            respostaFinal = "❌ Erro ao salvar na aba Fixos.";
+                        }
+                    }
                     else if (ia.acao === "CONSULTAR") {
                         const dadosCompletos = await lerDadosCompletos(from);
                         const promptResumo = `
                         CONTEXTO: Assistente financeiro.
                         DATA: ${getDataBrasilia()}
                         DADOS: ${dadosCompletos}
-                        PERGUNTA: "${textoParaIA}"
-                        ESTILO: WhatsApp (Emojis, Negrito).
+                        
+                        INSTRUÇÃO: Responda à pergunta "${textoParaIA}" usando os dados acima.
+                        Se a pergunta for "quais são meus fixos", LEIA a seção "CONFIGURAÇÃO DE FIXOS".
+                        ESTILO: WhatsApp.
                         JSON RESPOSTA: {"resposta": "Texto"}
                         `;
                         const resumoRaw = await perguntarParaGroq(promptResumo);
@@ -359,4 +372,4 @@ async function markMessageAsRead(messageId) {
     } catch (error) { }
 }
 
-app.listen(PORT, () => console.log(`Servidor V9.4 rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V10.1 rodando na porta ${PORT}`));
