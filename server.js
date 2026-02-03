@@ -19,6 +19,26 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const GROQ_API_KEY = process.env.GROQ_API_KEY; 
 const SHEET_ID = process.env.SHEET_ID; 
 
+// --- TEXTO DO MENU (CORREÇÃO) ---
+const MENU_AJUDA = `🤖 *Manual do Assistente V12.1*
+
+📸 *VISÃO (Novo!)*
+- Mande foto de um recibo ou nota fiscal para eu ler e registrar sozinho.
+
+📊 *GRÁFICOS (Novo!)*
+- Digite *"Gerar gráfico"* para ver sua pizza de gastos do mês.
+
+🔔 *LEMBRETES*
+- Digite *"Ativar lembretes"* para receber avisos diários às 09:40.
+
+📝 *BÁSICO*
+- *"Gastei 50 no mercado"* (Registra gasto)
+- *"Cadastrar fixo Aluguel 1000"* (Cria conta recorrente)
+- *"Lançar fixos"* (Lança as contas do mês)
+- *"Quanto gastei hoje?"* (Consulta)
+
+Estou pronto! 🚀`;
+
 // --- UTILITÁRIOS ---
 function getDataBrasilia() {
     return new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
@@ -36,25 +56,21 @@ function limparEConverterJSON(texto) {
     } catch (e) { return null; }
 }
 
-// --- 👁️ VISÃO COMPUTACIONAL (OCR DE NOTAS) ---
+// --- 👁️ VISION (OCR) ---
 async function analisarImagemComVision(mediaId) {
     try {
-        // 1. Pega a URL da imagem no WhatsApp
         const urlRes = await axios.get(`https://graph.facebook.com/v21.0/${mediaId}`, { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } });
-        // 2. Baixa a imagem como "ArrayBuffer"
         const imgRes = await axios.get(urlRes.data.url, { responseType: 'arraybuffer', headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } });
-        // 3. Converte para Base64
         const base64Image = Buffer.from(imgRes.data).toString('base64');
         const dataUrl = `data:image/jpeg;base64,${base64Image}`;
 
-        // 4. Manda para o Llama Vision (Groq)
         const response = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
-            model: "llama-3.2-11b-vision-preview", // Modelo que enxerga!
+            model: "llama-3.2-11b-vision-preview",
             messages: [
                 {
                     role: "user",
                     content: [
-                        { type: "text", text: "Analise esta imagem de recibo/nota fiscal. Extraia: Item principal (ou nome da loja), Valor Total e tente adivinhar a Categoria. Data use a de hoje se não tiver na nota. Retorne APENAS um JSON: {\"acao\": \"REGISTRAR\", \"dados\": {\"data\": \"DD/MM/AAAA\", \"categoria\": \"Categoria\", \"item\": \"Nome\", \"valor\": \"0.00\", \"tipo\": \"Saída\"}}" },
+                        { type: "text", text: "Analise esta imagem. Extraia: Item, Valor e Categoria. Retorne JSON: {\"acao\": \"REGISTRAR\", \"dados\": {\"data\": \"HOJE\", \"categoria\": \"Outros\", \"item\": \"Nome\", \"valor\": \"0.00\", \"tipo\": \"Saída\"}}" },
                         { type: "image_url", image_url: { url: dataUrl } }
                     ]
                 }
@@ -62,23 +78,22 @@ async function analisarImagemComVision(mediaId) {
             temperature: 0.1
         }, { headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' } });
 
-        return response.data.choices[0].message.content;
-    } catch (error) {
-        console.error("Erro Vision:", error.response ? error.response.data : error.message);
-        return null;
-    }
+        // Ajuste de data para hoje caso a IA não pegue
+        let json = limparEConverterJSON(response.data.choices[0].message.content);
+        if (json && json.dados) json.dados.data = getDataBrasilia();
+        return json;
+    } catch (error) { return null; }
 }
 
-// --- 📊 GERADOR DE GRÁFICOS (QUICKCHART) ---
+// --- 📊 GRÁFICOS ---
 async function gerarGraficoPizza(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
-        const rows = await sheetUser.getRows({ limit: 100 }); // Pega últimos 100
+        const rows = await sheetUser.getRows({ limit: 100 });
         const mesAtual = getMesAnoAtual();
-
-        // Agrega dados
         const gastosPorCat = {};
+        
         rows.forEach(row => {
             if (row.get('Data').includes(mesAtual) && row.get('Tipo') === 'Saída') {
                 const cat = row.get('Categoria');
@@ -90,26 +105,13 @@ async function gerarGraficoPizza(numeroUsuario) {
 
         if (Object.keys(gastosPorCat).length === 0) return null;
 
-        const labels = Object.keys(gastosPorCat);
-        const data = Object.values(gastosPorCat);
-
-        // Cria URL do QuickChart
         const chartConfig = {
             type: 'pie',
-            data: {
-                labels: labels,
-                datasets: [{ data: data, backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF'] }]
-            },
-            options: { 
-                title: { display: true, text: `Gastos de ${mesAtual}` },
-                plugins: { datalabels: { color: 'white', font: { weight: 'bold' } } }
-            }
+            data: { labels: Object.keys(gastosPorCat), datasets: [{ data: Object.values(gastosPorCat) }] },
+            options: { title: { display: true, text: `Gastos ${mesAtual}` }, plugins: { datalabels: { color: 'white', font: { weight: 'bold' } } } }
         };
-        
-        const url = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=500&h=300`;
-        return url;
-
-    } catch (e) { console.error(e); return null; }
+        return `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(chartConfig))}&w=500&h=300`;
+    } catch (e) { return null; }
 }
 
 // --- PLANILHA CORE ---
@@ -136,7 +138,7 @@ async function getCategoriasPermitidas() {
     } catch (e) { return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; }
 }
 
-// --- FUNÇÕES DE AÇÃO ---
+// --- AÇÕES ---
 async function inscreverUsuario(numero) {
     try {
         const doc = await getDoc();
@@ -146,7 +148,7 @@ async function inscreverUsuario(numero) {
         if (rows.find(row => row.get('Numero') === numero)) return "✅ Já está ativo!";
         await sheetUsers.addRow({ 'Numero': numero, 'Ativo': 'Sim' });
         return "🔔 Notificações Ativadas!";
-    } catch (e) { return "Erro."; }
+    } catch (e) { return "Erro ao ativar."; }
 }
 async function cadastrarNovoFixo(dados) {
     const doc = await getDoc();
@@ -177,11 +179,11 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
             totalGastoMes += parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
         }
     });
-    if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *ESTOUROU A META!*`;
+    if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *META ESTOURADA!*`;
     return "";
 }
 
-// --- ARQUIVO DE ÁUDIO ---
+// --- AUDIO & AI ---
 async function transcreverAudio(mediaId) {
     try {
         const urlRes = await axios.get(`https://graph.facebook.com/v21.0/${mediaId}`, { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } });
@@ -197,7 +199,6 @@ async function transcreverAudio(mediaId) {
     } catch (e) { throw new Error("Erro audio"); }
 }
 
-// --- CÉREBRO TEXTO ---
 async function perguntarParaGroq(prompt) {
     try {
         const res = await axios.post('https://api.groq.com/openai/v1/chat/completions', {
@@ -209,7 +210,6 @@ async function perguntarParaGroq(prompt) {
     } catch (e) { return null; }
 }
 
-// --- SEND MESSAGE (TEXTO & IMAGEM) ---
 async function sendMessage(to, text, imageUrl = null) {
     try {
         const body = { messaging_product: 'whatsapp', to: to };
@@ -223,7 +223,7 @@ async function sendMessage(to, text, imageUrl = null) {
     } catch (e) { console.error("Erro envio Zap"); }
 }
 
-// --- CRON JOBS ---
+// --- CRON ---
 function iniciarAgendamentos() {
     cron.schedule('40 09 * * 1-5', async () => {
         const doc = await getDoc();
@@ -237,7 +237,7 @@ function iniciarAgendamentos() {
 iniciarAgendamentos();
 
 // --- WEBHOOK ---
-app.get('/', (req, res) => res.send('🤖 Bot V12.0 (Vision & Charts) ONLINE!'));
+app.get('/', (req, res) => res.send('🤖 Bot V12.1 (Menu + Vision) ONLINE!'));
 app.get('/webhook', (req, res) => {
     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === MY_TOKEN) res.status(200).send(req.query['hub.challenge']);
     else res.sendStatus(403);
@@ -251,31 +251,34 @@ app.post('/webhook', async (req, res) => {
 
         try {
             let textoParaIA = null;
-            let ia = null; // Objeto final de comando
+            let ia = null; 
 
-            // 1. SE FOR IMAGEM (OCR) 📸
             if (message.type === 'image') {
-                await sendMessage(from, "👁️ Analisando sua nota fiscal... aguarde.");
-                const jsonVision = await analisarImagemComVision(message.image.id);
-                if (jsonVision) {
-                    ia = limparEConverterJSON(jsonVision); // Já sai pronto para registrar!
-                } else {
-                    await sendMessage(from, "❌ Não consegui ler a imagem.");
-                }
+                await sendMessage(from, "👁️ Analisando imagem...");
+                const json = await analisarImagemComVision(message.image.id);
+                if (json) ia = json; // Se leu a imagem, já temos o comando!
+                else await sendMessage(from, "❌ Não entendi a imagem.");
             }
-            // 2. SE FOR ÁUDIO 🎤
             else if (message.type === 'audio') {
                 textoParaIA = await transcreverAudio(message.audio.id);
             }
-            // 3. SE FOR TEXTO 📝
             else if (message.type === 'text') {
                 textoParaIA = message.text.body;
             }
 
-            // SE TIVER TEXTO (Audio ou Texto Digitado), CLASSIFICA
             if (textoParaIA && !ia) {
                 const txt = textoParaIA.toLowerCase();
-                if (txt.includes('ativar lembretes')) { await sendMessage(from, await inscreverUsuario(from)); return res.sendStatus(200); }
+                
+                // 🚨 CORREÇÃO: VERIFICA MENU ANTES DE CHAMAR A IA 🚨
+                if (txt.includes('ajuda') || txt.includes('menu') || txt.includes('funciona') || txt.includes('o que você faz')) {
+                    await sendMessage(from, MENU_AJUDA);
+                    return res.sendStatus(200); // Para aqui, não gasta IA
+                }
+                
+                if (txt.includes('ativar lembretes')) { 
+                    await sendMessage(from, await inscreverUsuario(from)); 
+                    return res.sendStatus(200); 
+                }
                 
                 const cats = await getCategoriasPermitidas();
                 const prompt = `Entrada: "${textoParaIA}". Data: ${getDataBrasilia()}. Categorias: [${cats}].
@@ -289,7 +292,6 @@ app.post('/webhook', async (req, res) => {
                 ia = limparEConverterJSON(raw);
             }
 
-            // --- EXECUÇÃO DO COMANDO ---
             if (ia) {
                 if (ia.acao === "REGISTRAR") {
                     const salvou = await adicionarNaPlanilha(ia.dados, from);
@@ -303,13 +305,11 @@ app.post('/webhook', async (req, res) => {
                     await sendMessage(from, "📌 Fixo configurado!");
                 }
                 else if (ia.acao === "CONSULTAR") {
-                    // SE PEDIU GRÁFICO 📊
                     if (textoParaIA && (textoParaIA.toLowerCase().includes('grafico') || textoParaIA.toLowerCase().includes('gráfico'))) {
-                        const urlGrafico = await gerarGraficoPizza(from);
-                        if (urlGrafico) await sendMessage(from, "Aqui está sua distribuição de gastos:", urlGrafico);
-                        else await sendMessage(from, "⚠️ Não tenho dados suficientes no mês para gerar o gráfico.");
+                        const url = await gerarGraficoPizza(from);
+                        if (url) await sendMessage(from, "Seus gastos:", url);
+                        else await sendMessage(from, "⚠️ Sem dados para gráfico.");
                     } else {
-                        // CONSULTA TEXTO NORMAL
                         const doc = await getDoc();
                         const sheetUser = await getSheetParaUsuario(from);
                         const rows = await sheetUser.getRows({limit:20});
@@ -328,4 +328,4 @@ app.post('/webhook', async (req, res) => {
     res.sendStatus(200);
 });
 
-app.listen(PORT, () => console.log(`V12.0 Running on ${PORT}`));
+app.listen(PORT, () => console.log(`V12.1 Running on ${PORT}`));
