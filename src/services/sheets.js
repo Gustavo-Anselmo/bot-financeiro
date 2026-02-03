@@ -6,6 +6,7 @@ require('dotenv').config();
 
 const SHEET_ID = process.env.SHEET_ID;
 
+// --- CONEXÃO ---
 async function getDoc() {
     const serviceAccountAuth = new JWT({
         email: creds.client_email,
@@ -24,6 +25,7 @@ async function getSheetParaUsuario(numeroUsuario) {
     return sheet;
 }
 
+// --- BOAS VINDAS ---
 async function verificarUsuarioNovo(numero) {
     try {
         const doc = await getDoc();
@@ -39,6 +41,17 @@ async function verificarUsuarioNovo(numero) {
     } catch (e) { return false; }
 }
 
+async function inscreverUsuario(numero) {
+    const doc = await getDoc();
+    let sheetUsers = doc.sheetsByTitle['Usuarios'];
+    if (!sheetUsers) sheetUsers = await doc.addSheet({ title: 'Usuarios', headerValues: ['Numero', 'Ativo'] });
+    const rows = await sheetUsers.getRows();
+    if (rows.find(row => row.get('Numero') === numero)) return "⚠️ *Aviso:* Você já faz parte da lista VIP de lembretes.";
+    await sheetUsers.addRow({ 'Numero': numero, 'Ativo': 'Sim' });
+    return "🔔 *Lembretes Ativados!*\n\nAgora você receberá notificações diárias às 09:40 para manter seu controle financeiro impecável.";
+}
+
+// --- EDIÇÃO E EXCLUSÃO ---
 async function editarUltimoGasto(nomeItem, novoValor, numeroUsuario) {
     try {
         const sheet = await getSheetParaUsuario(numeroUsuario);
@@ -50,9 +63,12 @@ async function editarUltimoGasto(nomeItem, novoValor, numeroUsuario) {
             rowToEdit = rows.reverse().find(r => r.get('Item/Descrição').toLowerCase().includes(nomeItem.toLowerCase()));
         }
         if (!rowToEdit) return false;
+        
+        const valorAntigo = rowToEdit.get('Valor');
         rowToEdit.set('Valor', novoValor);
         await rowToEdit.save();
-        return { item: rowToEdit.get('Item/Descrição'), novo_valor: novoValor };
+        
+        return { item: rowToEdit.get('Item/Descrição'), novo_valor: novoValor, valor_antigo: valorAntigo };
     } catch (e) { return false; }
 }
 
@@ -74,6 +90,7 @@ async function excluirGasto(nomeItem, numeroUsuario) {
     } catch (e) { return false; }
 }
 
+// --- CATEGORIAS ---
 async function criarNovaCategoria(novaCategoria) {
     try {
         const doc = await getDoc();
@@ -99,16 +116,7 @@ async function getCategoriasPermitidas() {
     } catch (e) { return "Alimentação, Transporte, Lazer, Casa, Contas, Outros"; }
 }
 
-async function inscreverUsuario(numero) {
-    const doc = await getDoc();
-    let sheetUsers = doc.sheetsByTitle['Usuarios'];
-    if (!sheetUsers) sheetUsers = await doc.addSheet({ title: 'Usuarios', headerValues: ['Numero', 'Ativo'] });
-    const rows = await sheetUsers.getRows();
-    if (rows.find(row => row.get('Numero') === numero)) return "⚠️ *Aviso:* Seu número já está na lista.";
-    await sheetUsers.addRow({ 'Numero': numero, 'Ativo': 'Sim' });
-    return "✅ *Lembretes Ativados!*";
-}
-
+// --- FIXOS ---
 async function cadastrarNovoFixo(dados) {
     const doc = await getDoc();
     let sheetFixos = doc.sheetsByTitle['Fixos'];
@@ -121,13 +129,15 @@ async function lancarGastosFixos(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetFixos = doc.sheetsByTitle['Fixos'];
-        if (!sheetFixos) return "⚠️ Sem fixos.";
+        if (!sheetFixos) return "⚠️ *Atenção:* Você ainda não tem gastos fixos cadastrados.";
         const rowsFixos = await sheetFixos.getRows();
-        if (rowsFixos.length === 0) return "⚠️ Lista vazia.";
+        if (rowsFixos.length === 0) return "⚠️ *Atenção:* Sua lista de fixos está vazia.";
+        
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
         const dataHoje = getDataBrasilia();
         let total = 0;
         let resumo = "";
+        
         for (const row of rowsFixos) {
             const item = row.get('Item');
             const valor = row.get('Valor');
@@ -136,10 +146,11 @@ async function lancarGastosFixos(numeroUsuario) {
             total += parseFloat(valor.replace('R$', '').replace(',', '.'));
             resumo += `▪️ ${item}: R$ ${valor}\n`;
         }
-        return `✅ *Lançados:*\n${resumo}\n💰 Total: R$ ${total.toFixed(2)}`;
-    } catch (e) { return "Erro."; }
+        return `✅ *Lançamento Mensal Concluído*\n\n${resumo}\n💰 *Total Lançado:* R$ ${total.toFixed(2)}`;
+    } catch (e) { return "❌ Erro técnico ao lançar fixos."; }
 }
 
+// --- REGISTRO E CONSULTA ---
 async function adicionarNaPlanilha(dados, numeroUsuario) {
     const sheet = await getSheetParaUsuario(numeroUsuario);
     await sheet.addRow({ 'Data': dados.data, 'Categoria': dados.categoria, 'Item/Descrição': dados.item, 'Valor': dados.valor, 'Tipo': dados.tipo });
@@ -164,7 +175,7 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
                 totalGastoMes += parseFloat(row.get('Valor').replace('R$', '').replace(',', '.'));
             }
         });
-        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *ALERTA:* Meta estourada!`;
+        if ((totalGastoMes + parseFloat(valorNovo)) > limite) return `\n\n🚨 *ALERTA DE META*\nVocê ultrapassou seu limite planejado para *${categoria}*!`;
         return "";
     } catch (e) { return ""; }
 }

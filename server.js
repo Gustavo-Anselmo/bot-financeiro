@@ -1,4 +1,3 @@
-// server.js (Versão Debug V13.1)
 const express = require('express');
 const cron = require('node-cron');
 const { getDataBrasilia, limparEConverterJSON } = require('./src/utils');
@@ -12,30 +11,42 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const MY_TOKEN = process.env.MY_TOKEN;
 
-const MENU_AJUDA = `👋 *Assistente Financeiro V13.1*
+// MENU PREMIUM CONSISTENTE
+const MENU_AJUDA = `👋 *Olá! Sou seu Assistente Financeiro.*
 
-*1. Registro Rápido*
-_"Gastei 50 no Uber"_
+Estou aqui para organizar seu dinheiro de forma simples. Veja o que posso fazer:
+
+📝 *1. Registrar Gastos*
+Envie texto, áudio ou foto.
+_"Gastei 150 no mercado"_
+_"Recebi 500 de pix"_
+
+✏️ *2. Edição e Controle*
+Errou? É só pedir para arrumar.
+_"Mudar valor do Uber para 20"_
 _"Apagar último gasto"_
-_"Mudar valor do Uber para 60"_
 
-*2. Gestão*
+🔄 *3. Contas Fixas*
+Organize seus boletos mensais.
 _"Cadastrar fixo Aluguel 1200"_
-_"Lançar fixos"_
+_"Lançar fixos"_ (para confirmar no mês)
 
-*3. Categorias*
-Eu uso botões para criar novas categorias!
+📂 *4. Categorias Inteligentes*
+Eu organizo tudo. Se a categoria não existir, eu crio para você (com botões! 🔘).
 
-*4. Consultas*
-_"Gerar gráfico"_ | _"Resumo"_
-_"Ativar lembretes"_`;
+📊 *5. Consultas*
+_"Gerar gráfico"_ ou _"Resumo do mês"_
+
+🔔 *Dica:* Digite _"Ativar lembretes"_ para eu te avisar todo dia.
+
+Como quer começar?`;
 
 // CRON JOB
 cron.schedule('40 09 * * 1-5', async () => {
     try {
         const usuarios = await sheets.getUsuariosAtivos();
-        if (usuarios.length > 0) usuarios.forEach(num => sendMessage(num, "☀️ Bom dia! Registre seus gastos de hoje."));
-    } catch (e) { console.error("Erro no Cron:", e); }
+        if (usuarios.length > 0) usuarios.forEach(num => sendMessage(num, "☀️ *Bom dia!*\n\nLembrete rápido: teve algum gasto ontem ou hoje? Registre agora para manter o controle em dia."));
+    } catch (e) { console.error("Erro Cron:", e); }
 }, { scheduled: true, timezone: "America/Sao_Paulo" });
 
 app.get('/webhook', (req, res) => {
@@ -54,18 +65,18 @@ app.post('/webhook', async (req, res) => {
             let textoParaIA = null;
             let ia = null;
 
-            // TRATAMENTO DE BOTÕES
+            // BOTÕES
             if (message.type === 'interactive' && message.interactive.type === 'button_reply') {
                 const idBotao = message.interactive.button_reply.id;
                 if (idBotao.startsWith('CRIAR_')) {
                     const nomeCategoria = idBotao.replace('CRIAR_', '');
                     await sendMessage(from, `🔄 Criando categoria *${nomeCategoria}*...`);
                     const criou = await sheets.criarNovaCategoria(nomeCategoria);
-                    if (criou) await sendMessage(from, `✅ Categoria *${nomeCategoria}* criada!`);
+                    if (criou) await sendMessage(from, `✅ Categoria *${nomeCategoria}* criada com sucesso!`);
                     else await sendMessage(from, `⚠️ A categoria *${nomeCategoria}* já existe.`);
                 } 
                 else if (idBotao === 'CANCELAR_CRIACAO') {
-                    await sendMessage(from, "❌ Cancelado.");
+                    await sendMessage(from, "❌ *Operação Cancelada*.");
                 }
                 return res.sendStatus(200); 
             }
@@ -80,24 +91,24 @@ app.post('/webhook', async (req, res) => {
 
             // INPUTS
             if (message.type === 'image') {
-                await sendMessage(from, "📸 Processando imagem...");
+                await sendMessage(from, "📸 *Imagem recebida!* Processando...");
                 ia = await analisarImagemComVision(message.image.id);
-                if (!ia) await sendMessage(from, "⚠️ Erro ao ler imagem (IA Vision falhou).");
+                if (!ia) await sendMessage(from, "⚠️ Não consegui ler a imagem. Tente uma foto mais clara.");
             } else if (message.type === 'audio') {
                 textoParaIA = await transcreverAudio(message.audio.id);
             } else if (message.type === 'text') {
                 textoParaIA = message.text.body;
             }
 
-            // INTELIGÊNCIA ARTIFICIAL
+            // IA & COMANDOS
             if (textoParaIA && !ia) {
                 const txt = textoParaIA.toLowerCase();
-                const gatilhos = ['ajuda', 'menu', 'o que voce faz', 'funcoes', 'oi', 'ola'];
+                const gatilhos = ['ajuda', 'menu', 'o que voce faz', 'funcoes', 'oi', 'ola', 'iniciar'];
                 
                 if (gatilhos.some(g => txt.includes(g))) { await sendMessage(from, MENU_AJUDA); return res.sendStatus(200); }
                 if (txt.includes('ativar lembretes')) { await sendMessage(from, await sheets.inscreverUsuario(from)); return res.sendStatus(200); }
                 if (txt.includes('lancar fixos')) {
-                    await sendMessage(from, "🔄 Processando fixos...");
+                    await sendMessage(from, "🔄 *Processando fixos...*");
                     await sendMessage(from, await sheets.lancarGastosFixos(from));
                     return res.sendStatus(200);
                 }
@@ -123,22 +134,21 @@ app.post('/webhook', async (req, res) => {
                 {"acao": "CONVERSAR", "resposta": "..."}
                 `;
                 
-                console.log("Enviando para Groq..."); // LOG DE DEBUG
+                console.log("Enviando para Groq...");
                 const raw = await perguntarParaGroq(prompt);
-                console.log("Resposta Raw Groq:", raw); // LOG DE DEBUG
-                
                 ia = limparEConverterJSON(raw);
             }
 
-            // EXECUÇÃO DA AÇÃO
+            // RESPOSTAS FORMATADAS
             if (ia) {
                 if (ia.acao === "REGISTRAR") {
                     const salvou = await sheets.adicionarNaPlanilha(ia.dados, from);
                     if (salvou) {
                         const alerta = await sheets.verificarMeta(ia.dados.categoria, ia.dados.valor, from);
-                        await sendMessage(from, `✅ *Registrado*\n📝 ${ia.dados.item}\n💰 R$ ${ia.dados.valor}\n📂 ${ia.dados.categoria}${alerta}`);
+                        // 🎨 ESTILO TICKET/RECIBO
+                        await sendMessage(from, `✅ *Registro Confirmado*\n\n📝 Item: *${ia.dados.item}*\n💰 Valor: *R$ ${ia.dados.valor}*\n📂 Categoria: ${ia.dados.categoria}${alerta}`);
                     } else {
-                        await sendMessage(from, "❌ Erro ao salvar na planilha (Verifique logs).");
+                        await sendMessage(from, "❌ Erro ao salvar na planilha.");
                     }
                 } 
                 else if (ia.acao === "SUGERIR_CRIACAO") {
@@ -151,50 +161,47 @@ app.post('/webhook', async (req, res) => {
                 }
                 else if (ia.acao === "EDITAR") {
                     const resultado = await sheets.editarUltimoGasto(ia.dados.item, ia.dados.novo_valor, from);
-                    if (resultado) await sendMessage(from, `✏️ *Atualizado!*\nO item *"${resultado.item}"* agora custa *R$ ${resultado.novo_valor}*.`);
-                    else await sendMessage(from, `❌ Não encontrei gasto com nome *"${ia.dados.item}"*.`);
+                    if (resultado) await sendMessage(from, `✏️ *Atualizado com Sucesso*\n\nItem: *${resultado.item}*\nAntigo: ~R$ ${resultado.valor_antigo}~\nNovo: *R$ ${resultado.novo_valor}*`);
+                    else await sendMessage(from, `❌ Não encontrei gasto com nome *"${ia.dados.item}"* recentemente.`);
                 }
                 else if (ia.acao === "EXCLUIR") {
                     const resultado = await sheets.excluirGasto(ia.dados.item, from);
-                    if (resultado) await sendMessage(from, `🗑️ *Removido!*\nApaguei: *${resultado.item}* (R$ ${resultado.valor}).`);
+                    if (resultado) await sendMessage(from, `🗑️ *Removido da Planilha*\n\nItem: *${resultado.item}*\nValor: *R$ ${resultado.valor}*`);
                     else await sendMessage(from, `❌ Nada encontrado para apagar.`);
                 }
                 else if (ia.acao === "CADASTRAR_FIXO") {
                     await sheets.cadastrarNovoFixo(ia.dados);
-                    await sendMessage(from, "📌 Fixo configurado.");
+                    await sendMessage(from, `📌 *Fixo Configurado*\n\nItem: *${ia.dados.item}*\nValor: *R$ ${ia.dados.valor}*\n\nLembre de usar "Lançar fixos" mensalmente.`);
                 } 
                 else if (ia.acao === "CONSULTAR") {
                     if (textoParaIA && textoParaIA.toLowerCase().includes('grafico')) {
                         const url = await sheets.gerarGraficoPizza(from);
-                        if (url) await sendMessage(from, "📊 *Análise:*", url);
+                        if (url) await sendMessage(from, "📊 *Análise Visual:*", url);
                         else await sendMessage(from, "📉 Sem dados suficientes.");
                     } else {
                         const doc = await sheets.getDoc();
                         const sheetUser = await sheets.getSheetParaUsuario(from);
                         const rows = await sheetUser.getRows({limit:20});
                         let resumo = rows.map(r => `${r.get('Data')}: ${r.get('Item/Descrição')} - R$ ${r.get('Valor')}`).join('\n');
-                        const resp = await perguntarParaGroq(`Dados:\n${resumo}\n\nPergunta: "${textoParaIA || 'Resumo'}". Responda bonito.`);
+                        const resp = await perguntarParaGroq(`Dados:\n${resumo}\n\nPergunta: "${textoParaIA || 'Resumo'}". Responda de forma analítica e formatada (Markdown).`);
                         await sendMessage(from, resp);
                     }
                 } 
                 else {
-                    await sendMessage(from, ia.resposta || "Não entendi.");
+                    await sendMessage(from, ia.resposta || "Desculpe, não entendi.");
                 }
             } else {
-                // 🚨 AQUI ESTÁ A CORREÇÃO DO SILÊNCIO 🚨
-                // Se a IA retornar null (erro), o bot avisa em vez de calar.
                 if (textoParaIA && !ia) {
-                    console.error("Erro IA: Retornou nulo ou falhou ao parsear JSON.");
-                    await sendMessage(from, "😵 Tive um problema técnico na minha inteligência. Tente reformular a frase.");
+                    console.error("Erro IA.");
+                    await sendMessage(from, "😵 Tive um soluço técnico. Pode repetir?");
                 }
             }
 
         } catch (e) { 
-            console.error("Erro Geral no Controller:", e);
-            // await sendMessage(from, "❌ Erro fatal no sistema."); // Opcional: avisar usuário
+            console.error("Erro Geral:", e);
         }
     }
     res.sendStatus(200);
 });
 
-app.listen(PORT, () => console.log(`Servidor V13.1 (Com Logs) rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor V13.3 (Beleza + Estabilidade) rodando na porta ${PORT}`));
