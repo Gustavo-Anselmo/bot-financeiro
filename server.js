@@ -11,7 +11,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const MY_TOKEN = process.env.MY_TOKEN;
 
-// 📋 MENU PREMIUM V15.0 - MELHORADO
+// 📋 MENU PREMIUM V16.0 - MELHORADO
 const MENU_AJUDA = `👋 *Olá! Sou seu Assistente Financeiro.*
 
 Estou aqui para organizar seu dinheiro de forma simples e inteligente.
@@ -50,7 +50,6 @@ _"Desativar alertas"_ - Controla sem notificações
 Como quer começar? 😊`;
 
 // 🗂️ ARMAZENAMENTO TEMPORÁRIO DE REGISTROS PENDENTES
-// Usado quando o usuário recusa criar categoria e queremos salvar em "Outros"
 const registrosPendentes = new Map();
 
 // ⏰ CRON JOB - LEMBRETES DIÁRIOS
@@ -69,7 +68,6 @@ cron.schedule('40 09 * * 1-5', async () => {
                     "Lembrete rápido: teve algum gasto ontem ou hoje?\n\n" +
                     "Registre agora para manter o controle em dia! 📊"
                 );
-                // Delay para evitar rate limit
                 await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
@@ -100,7 +98,6 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
     const body = req.body;
 
-    // Valida estrutura da requisição
     if (!body.object || !body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
         return res.sendStatus(200);
     }
@@ -111,7 +108,6 @@ app.post('/webhook', async (req, res) => {
     console.log(`\n[MSG] Nova mensagem de ${from} (Tipo: ${message.type})`);
 
     try {
-        // Marca como lida
         await markMessageAsRead(message.id);
 
         let textoParaIA = null;
@@ -134,30 +130,35 @@ app.post('/webhook', async (req, res) => {
                 if (criou) {
                     await sendMessage(from, `✅ *Categoria ${nomeCategoria} criada!*`);
                     
-                    // ✅ Processa o registro pendente com a nova categoria
                     const pendente = registrosPendentes.get(from);
                     if (pendente) {
                         console.log('[PENDENTE] Processando registro com nova categoria:', pendente);
                         
-                        // Atualiza categoria para a recém-criada
                         pendente.dados.categoria = nomeCategoria;
-                        
                         await processarRegistro(pendente, from);
                         registrosPendentes.delete(from);
                     }
                 } else {
-                    await sendMessage(from, `⚠️ A categoria *${nomeCategoria}* já existe na sua planilha.`);
+                    await sendMessage(from, `⚠️ A categoria *${nomeCategoria}* já existe.`);
                 }
             } 
-            // ✅ CORRIGIDO: CANCELAR CRIAÇÃO - SALVA EM "OUTROS"
+            // ✅ CANCELAR CRIAÇÃO - SALVA EM "OUTROS"
             else if (idBotao === 'CANCELAR_CRIACAO') {
                 const pendente = registrosPendentes.get(from);
                 
                 if (pendente && pendente.dados) {
                     console.log('[CANCELAR] Salvando em "Outros":', pendente.dados);
                     
-                    // ✅ CORREÇÃO PRINCIPAL: Salva em "Outros" ao invés de cancelar
+                    // ✅ CORREÇÃO CRÍTICA: Garantir que todos os dados estão completos
                     pendente.dados.categoria = "Outros";
+                    
+                    // ✅ NOVO: Garantir que data e tipo estão presentes
+                    if (!pendente.dados.data) {
+                        pendente.dados.data = getDataBrasilia();
+                    }
+                    if (!pendente.dados.tipo) {
+                        pendente.dados.tipo = "Saída"; // Padrão se não especificado
+                    }
                     
                     await sendMessage(from, "📝 Ok! Salvando em *Outros*...");
                     await processarRegistro(pendente, from);
@@ -166,12 +167,11 @@ app.post('/webhook', async (req, res) => {
                     await sendMessage(
                         from, 
                         "❌ *Operação Cancelada.*\n\n" +
-                        "Não encontrei registro pendente. Tente registrar novamente."
+                        "Não encontrei registro pendente."
                     );
                 }
             }
             else if (idBotao.startsWith('CONFIRMAR_REGISTRO_')) {
-                // Futura funcionalidade: confirmar registros pendentes
                 await sendMessage(from, "⚠️ Função em desenvolvimento.");
             }
 
@@ -190,7 +190,7 @@ app.post('/webhook', async (req, res) => {
         }
 
         // ═══════════════════════════════════════════════════════
-        // 🎥 PROCESSAMENTO DE MÍDIA (IMAGEM/ÁUDIO)
+        // 🎥 PROCESSAMENTO DE MÍDIA
         // ═══════════════════════════════════════════════════════
         if (message.type === 'image') {
             console.log('[IMAGEM] Processando...');
@@ -204,8 +204,7 @@ app.post('/webhook', async (req, res) => {
                     "⚠️ *Não consegui ler a imagem.*\n\n" +
                     "Dicas:\n" +
                     "• Tire uma foto mais nítida\n" +
-                    "• Certifique-se que o valor está visível\n" +
-                    "• Evite reflexos ou sombras"
+                    "• Certifique-se que o valor está visível"
                 );
                 return res.sendStatus(200);
             }
@@ -223,8 +222,7 @@ app.post('/webhook', async (req, res) => {
                     "⚠️ *Não consegui entender o áudio.*\n\n" +
                     "Pode tentar:\n" +
                     "• Falar mais devagar\n" +
-                    "• Enviar como texto\n" +
-                    "• Gravar novamente"
+                    "• Enviar como texto"
                 );
                 return res.sendStatus(200);
             }
@@ -245,11 +243,9 @@ app.post('/webhook', async (req, res) => {
         // 🧠 PROCESSAMENTO INTELIGENTE (IA)
         // ═══════════════════════════════════════════════════════
         
-        // Se não temos ia ainda (de imagem), processa o texto
         if (!ia && textoParaIA) {
             console.log(`[IA] Enviando para processamento: "${textoParaIA.substring(0, 100)}"`);
 
-            // Comandos hardcoded para otimização
             const txtLower = textoParaIA.toLowerCase();
 
             // Menu / Ajuda
@@ -265,14 +261,14 @@ app.post('/webhook', async (req, res) => {
                 return res.sendStatus(200);
             }
 
-            // Ativar Alertas de Meta
+            // Ativar Alertas
             if (txtLower.includes('ativar alerta')) {
                 const msg = await sheets.ativarAlertasMeta(from);
                 await sendMessage(from, msg);
                 return res.sendStatus(200);
             }
 
-            // Desativar Alertas de Meta
+            // Desativar Alertas
             if (txtLower.includes('desativar alerta')) {
                 const msg = await sheets.desativarAlertasMeta(from);
                 await sendMessage(from, msg);
@@ -303,11 +299,11 @@ Analise e retorne JSON conforme instruções do system prompt.
             ia = limparEConverterJSON(respostaIA);
 
             if (!ia) {
-                console.warn('[IA] Resposta inválida recebida:', respostaIA);
+                console.warn('[IA] Resposta inválida:', respostaIA);
                 await sendMessage(
                     from,
                     "🤔 *Não entendi bem.*\n\n" +
-                    "Pode reformular? Ou digite *ajuda* para ver exemplos."
+                    "Pode reformular? Ou digite *ajuda*."
                 );
                 return res.sendStatus(200);
             }
@@ -324,8 +320,25 @@ Analise e retorne JSON conforme instruções do system prompt.
                 break;
 
             case 'SUGERIR_CRIACAO':
-                // ✅ CORREÇÃO: Armazena registro pendente ANTES de perguntar
-                registrosPendentes.set(from, ia);
+                // ✅ CORREÇÃO: Armazena registro com TODOS os dados necessários
+                // Garante que tipo_pendente está presente
+                if (ia.dados && !ia.dados.tipo_pendente) {
+                    ia.dados.tipo_pendente = "Saída"; // Padrão
+                }
+                
+                // Converte estrutura para formato compatível com processarRegistro
+                const registroPendente = {
+                    acao: "REGISTRAR",
+                    dados: {
+                        data: ia.dados.data_pendente || getDataBrasilia(),
+                        categoria: "Outros", // Será substituído se criar categoria
+                        item: ia.dados.item_original,
+                        valor: ia.dados.valor_pendente || "0.00",
+                        tipo: ia.dados.tipo_pendente || "Saída"
+                    }
+                };
+                
+                registrosPendentes.set(from, registroPendente);
                 await processarSugestaoCategoria(ia, from);
                 break;
 
@@ -353,7 +366,7 @@ Analise e retorne JSON conforme instruções do system prompt.
                 await sendMessage(
                     from,
                     "🤔 *Não entendi bem.*\n\n" +
-                    "Pode reformular? Ou digite *ajuda* para ver exemplos."
+                    "Pode reformular? Ou digite *ajuda*."
                 );
         }
 
@@ -362,7 +375,7 @@ Analise e retorne JSON conforme instruções do system prompt.
         await sendMessage(
             from,
             "😵 *Erro inesperado!*\n\n" +
-            "Nosso sistema teve um problema. Pode tentar novamente?"
+            "Nosso sistema teve um problema. Tente novamente."
         );
     }
 
@@ -370,25 +383,22 @@ Analise e retorne JSON conforme instruções do system prompt.
 });
 
 // ═════════════════════════════════════════════════════════════
-// 🎯 FUNÇÕES DE PROCESSAMENTO (HANDLERS)
+// 🎯 FUNÇÕES DE PROCESSAMENTO
 // ═════════════════════════════════════════════════════════════
 
 async function processarRegistro(ia, from) {
     try {
-        // Valida dados antes de salvar
         const validacao = validarDadosRegistro(ia.dados);
         if (!validacao.valido) {
-            await sendMessage(from, `⚠️ *Dados Incompletos*\n\n${validacao.erro}`);
+            await sendMessage(from, `⚠️ *Dados Incompletos*\n\n${validacao.erro}\n\n💡 Por favor, envie novamente incluindo: data, item e valor.`);
             return;
         }
 
         const salvou = await sheets.adicionarNaPlanilha(ia.dados, from);
 
         if (salvou) {
-            // ✅ Verifica se o usuário quer alertas
             const alerta = await sheets.verificarMeta(ia.dados.categoria, ia.dados.valor, from);
 
-            // ✅ Formatação mais limpa
             const emoji = ia.dados.tipo === "Entrada" ? "💰" : "💸";
             let mensagem = `✅ *Registro Confirmado*\n\n` +
                 `${emoji} *${ia.dados.item}*\n` +
@@ -396,7 +406,6 @@ async function processarRegistro(ia, from) {
                 `📂 Categoria: ${ia.dados.categoria}\n` +
                 `📅 Data: ${ia.dados.data}`;
             
-            // Só adiciona alerta se existir
             if (alerta) {
                 mensagem += alerta;
             }
@@ -415,16 +424,14 @@ async function processarSugestaoCategoria(ia, from) {
     try {
         const sugestao = ia.dados.sugestao;
         
-        // ✅ MELHORADO: Mensagem mais clara informando que "Não" salva em Outros
         await sendButtonMessage(
             from,
-            `🤔 *Categoria Inexistente*\n\n` +
-            `O item *"${ia.dados.item_original}"* não se encaixa nas categorias atuais.\n\n` +
-            `Deseja criar a categoria *${sugestao}*?\n\n` +
+            `🤔 *Categoria inexistente para "${ia.dados.item_original}"*.\n\n` +
+            `Deseja criar *${sugestao}*?\n\n` +
             `_Se escolher "Não", o registro será salvo em "Outros"._`,
             [
                 { id: `CRIAR_${sugestao}`, title: '✅ Sim, Criar' },
-                { id: 'CANCELAR_CRIACAO', title: '❌ Não, usar Outros' }
+                { id: 'CANCELAR_CRIACAO', title: '❌ Não' }
             ]
         );
     } catch (error) {
@@ -496,7 +503,7 @@ async function processarCadastroFixo(ia, from) {
             `📝 Item: *${ia.dados.item}*\n` +
             `💵 Valor: *R$ ${ia.dados.valor}*\n` +
             `📂 Categoria: ${ia.dados.categoria}\n\n` +
-            `💡 *Lembre-se:* Use "Lançar fixos" todo mês para registrar automaticamente.`
+            `💡 *Lembre-se:* Use "Lançar fixos" todo mês.`
         );
     } catch (error) {
         console.error('[FIXO] Erro:', error);
@@ -523,7 +530,6 @@ async function processarConsulta(ia, from, textoOriginal) {
                 );
             }
         } else {
-            // Consulta textual genérica
             await sendMessage(from, "📊 *Analisando seus dados...*");
             
             const sheetUser = await sheets.getSheetParaUsuario(from);
@@ -567,7 +573,7 @@ Seja objetivo e dê insights úteis.
 // ═══════════════════════════════════════════════════════
 app.listen(PORT, () => {
     console.log('════════════════════════════════════════════════');
-    console.log(`  🤖 Bot Financeiro V15.1 - CORRIGIDO`);
+    console.log(`  🤖 Bot Financeiro V16.0 - MELHORADO`);
     console.log(`  🌐 Porta: ${PORT}`);
     console.log(`  📅 Inicializado: ${new Date().toLocaleString('pt-BR')}`);
     console.log('════════════════════════════════════════════════');
