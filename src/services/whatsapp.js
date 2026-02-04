@@ -14,8 +14,19 @@ async function sendMessage(to, text, imageUrl = null) {
             body.type = 'text';
             body.text = { body: text };
         }
-        await axios.post(`https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`, body, { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } });
-    } catch (e) { console.error("Erro Send:", e.message); }
+        await axios.post(
+            `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
+            body,
+            {
+                headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
+                timeout: 15000
+            }
+        );
+        return true;
+    } catch (e) {
+        console.error('[WHATSAPP] Erro ao enviar mensagem:', e.response?.data || e.message);
+        return false;
+    }
 }
 
 async function sendButtonMessage(to, text, buttons) {
@@ -37,8 +48,19 @@ async function sendButtonMessage(to, text, buttons) {
             }
         };
 
-        await axios.post(`https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`, body, { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } });
-    } catch (e) { console.error("Erro Button:", e.response ? e.response.data : e.message); }
+        await axios.post(
+            `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
+            body,
+            {
+                headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' },
+                timeout: 15000
+            }
+        );
+        return true;
+    } catch (e) {
+        console.error('[WHATSAPP] Erro ao enviar botões:', e.response?.data || e.message);
+        return false;
+    }
 }
 
 async function markMessageAsRead(messageId) {

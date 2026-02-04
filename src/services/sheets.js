@@ -152,6 +152,44 @@ async function inscreverUsuario(numero) {
 }
 
 /**
+ * Desinscreve usuário dos lembretes diários
+ * @param {string} numero - Número do WhatsApp
+ * @returns {Promise<string>} Mensagem de confirmação
+ */
+async function desinscreverUsuario(numero) {
+    try {
+        const doc = await getDoc();
+        const sheetUsers = doc.sheetsByTitle['Usuarios'];
+
+        if (!sheetUsers) {
+            return "⚠️ Você ainda não está cadastrado para lembretes.";
+        }
+
+        const rows = await sheetUsers.getRows();
+        const userRow = rows.find(row => row.get('Numero') === numero);
+
+        if (!userRow) {
+            return "⚠️ Você não está inscrito nos lembretes diários.";
+        }
+
+        if (userRow.get('Ativo') === 'Não') {
+            return "⚠️ *Lembretes já desativados!*\n\nVocê não está recebendo notificações diárias.";
+        }
+
+        userRow.set('Ativo', 'Não');
+        await userRow.save();
+
+        return "🔕 *Lembretes Desativados!*\n\n" +
+               "Você não receberá mais notificações diárias.\n\n" +
+               "💡 Digite _'Ativar lembretes'_ quando quiser voltar a receber.";
+
+    } catch (error) {
+        console.error('[SHEETS] Erro ao desinscrever usuário:', error.message);
+        return "❌ Erro ao desativar lembretes. Tente novamente.";
+    }
+}
+
+/**
  * Obtém lista de usuários ativos para envio de lembretes
  * @returns {Promise<Array<string>>}
  */
@@ -489,7 +527,7 @@ async function editarUltimoGasto(nomeItem, novoValor, numeroUsuario) {
         if (nomeItem === 'ULTIMO') {
             rowToEdit = rows[rows.length - 1];
         } else {
-            rowToEdit = rows.reverse().find(r => {
+            rowToEdit = [...rows].reverse().find(r => {
                 const itemNome = r.get('Item/Descrição');
                 return itemNome && itemNome.toLowerCase().includes(nomeItem.toLowerCase());
             });
@@ -533,7 +571,7 @@ async function excluirGasto(nomeItem, numeroUsuario) {
         if (nomeItem === 'ULTIMO') {
             rowToDelete = rows[rows.length - 1];
         } else {
-            rowToDelete = rows.reverse().find(r => {
+            rowToDelete = [...rows].reverse().find(r => {
                 const itemNome = r.get('Item/Descrição');
                 return itemNome && itemNome.toLowerCase().includes(nomeItem.toLowerCase());
             });
@@ -597,7 +635,7 @@ async function cadastrarNovoFixo(dados) {
 }
 
 /**
- * Lança todos os gastos fixos no extrato do usuário
+ * Lança todos os gastos fixos no extrato do usuário (evita duplicação no mesmo mês)
  * @param {string} numeroUsuario - Número do WhatsApp
  * @returns {Promise<string>} Mensagem com resumo
  */
@@ -619,14 +657,30 @@ async function lancarGastosFixos(numeroUsuario) {
         }
 
         const sheetUser = await getSheetParaUsuario(numeroUsuario);
+        const gastosDoMes = await sheetUser.getRows();
+        const mesAtual = getMesAnoAtual();
         const dataHoje = getDataBrasilia();
         let total = 0;
         let resumo = "";
+        let lancados = 0;
 
         for (const row of fixosAtivos) {
             const item = row.get('Item');
             const valor = row.get('Valor');
             const cat = row.get('Categoria');
+
+            const jaLancado = gastosDoMes.some(g => {
+                const dataRow = g.get('Data');
+                const itemRow = g.get('Item/Descrição');
+                const catRow = g.get('Categoria');
+                return dataRow && dataRow.includes(mesAtual) &&
+                    itemRow && itemRow.toLowerCase().trim() === item.toLowerCase().trim() &&
+                    catRow && catRow.toLowerCase().trim() === (cat || '').toLowerCase().trim();
+            });
+
+            if (jaLancado) {
+                continue;
+            }
 
             await sheetUser.addRow({
                 'Data': dataHoje,
@@ -636,13 +690,20 @@ async function lancarGastosFixos(numeroUsuario) {
                 'Tipo': 'Saída'
             });
 
-            total += parseFloat(valor.replace('R$', '').replace(',', '.'));
+            total += parseFloat(valor.replace('R$', '').replace(',', '.').trim());
             resumo += `▪️ ${item}: R$ ${valor}\n`;
+            lancados++;
+        }
+
+        if (lancados === 0) {
+            return "ℹ️ *Fixos já lançados*\n\n" +
+                   "Todos os seus gastos fixos já foram lançados neste mês.\n\n" +
+                   `📅 Aguarde o próximo mês para lançar novamente.`;
         }
 
         return `✅ *Lançamento Mensal Concluído*\n\n${resumo}\n` +
                `💰 *Total Lançado:* ${formatarValorBRL(total)}\n\n` +
-               `📊 Seus gastos fixos foram adicionados ao extrato de ${getMesAnoAtual()}.`;
+               `📊 ${lancados} gasto(s) fixo(s) adicionados ao extrato de ${mesAtual}.`;
 
     } catch (error) {
         console.error('[SHEETS] Erro ao lançar fixos:', error.message);
@@ -741,6 +802,7 @@ module.exports = {
     getSheetParaUsuario,
     verificarUsuarioNovo,
     inscreverUsuario,
+    desinscreverUsuario,
     getUsuariosAtivos,
     ativarAlertasMeta,
     desativarAlertasMeta,
