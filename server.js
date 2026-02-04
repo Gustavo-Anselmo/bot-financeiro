@@ -14,40 +14,40 @@ const MY_TOKEN = process.env.MY_TOKEN;
 // 📋 MENU PREMIUM V16.0 - MELHORADO
 const MENU_AJUDA = `👋 *Olá! Sou seu Assistente Financeiro.*
 
-Estou aqui para organizar seu dinheiro de forma simples e inteligente.
+\nEstou aqui para organizar seu dinheiro de forma simples e inteligente.
 
-📝 *1. Registrar Gastos*
-Envie como quiser: texto, áudio ou foto.
-_"Gastei 150 no mercado"_
-_"Recebi 500 de pix"_
-_"Paguei cinquenta na farmácia"_
+\n📝 *1. Registrar Gastos*
+\nEnvie como quiser: texto, áudio ou foto.
+\n_"Gastei 150 no mercado"_
+\n_"Recebi 500 de pix"_
+\n_"Paguei cinquenta na farmácia"_
 
-✏️ *2. Edição e Controle*
-Corrigir é fácil! Só pedir.
-_"Mudar valor do Uber para 20"_
-_"Apagar último gasto"_
-_"Corrigir valor da farmácia"_
+\n✏️ *2. Edição e Controle*
+\nCorrigir é fácil! Só pedir.
+\n_"Mudar valor do Uber para 20"_
+\n_"Apagar último gasto"_
+\n_"Corrigir valor da farmácia"_
 
-🔄 *3. Contas Fixas*
-Cadastre boletos que se repetem todo mês.
-_"Cadastrar fixo Aluguel 1200"_
-_"Lançar fixos"_ (quando chegar o mês)
+\n🔄 *3. Contas Fixas*
+\nCadastre boletos que se repetem todo mês.
+\n_"Cadastrar fixo Aluguel 1200"_
+\n_"Lançar fixos"_ (quando chegar o mês)
 
-📂 *4. Categorias Inteligentes*
-Eu organizo automaticamente! Se precisar criar nova categoria, pergunto antes.
+\n📂 *4. Categorias Inteligentes*
+\nEu organizo automaticamente! Se precisar criar nova categoria, pergunto antes.
 
-📊 *5. Consultas e Relatórios*
-_"Gerar gráfico"_
-_"Resumo do mês"_
-_"Quanto gastei em alimentação?"_
+\n📊 *5. Consultas e Relatórios*
+\n_"Gerar gráfico"_
+\n_"Resumo do mês"_
+\n_"Quanto gastei em alimentação?"_
 
-🔔 *6. Alertas de Meta (Opcional)*
-_"Ativar alertas"_ - Recebe aviso ao ultrapassar limites
-_"Desativar alertas"_ - Controla sem notificações
+\n🔔 *6. Alertas de Meta (Opcional)*
+\n_"Ativar alertas"_ - Recebe aviso ao ultrapassar limites
+\n_"Desativar alertas"_ - Controla sem notificações
 
-💡 *Dica:* Digite _"Ativar lembretes"_ para receber notificações diárias às 09:40.
+\n💡 *Dica:* Digite _"Ativar lembretes"_ para receber notificações diárias às 09:40.
 
-Como quer começar? 😊`;
+\nComo quer começar? 😊`;
 
 // 🗂️ ARMAZENAMENTO TEMPORÁRIO DE REGISTROS PENDENTES
 const registrosPendentes = new Map();
