@@ -1,6 +1,6 @@
 const express = require('express');
 const cron = require('node-cron');
-const { getDataBrasilia, limparEConverterJSON } = require('./src/utils');
+const { getDataBrasilia, limparEConverterJSON, formatarRespostaWhatsApp } = require('./src/utils');
 const { sendMessage, markMessageAsRead } = require('./src/services/whatsapp');
 const { perguntarParaGroq, transcreverAudio, analisarImagemComVision } = require('./src/services/ai');
 const sheets = require('./src/services/sheets');
@@ -358,7 +358,8 @@ Analise e retorne JSON conforme instruções do system prompt.
                 break;
 
             case 'CONVERSAR':
-                await sendMessage(from, ia.resposta || "👋 Olá! Como posso ajudar?");
+                const respostaConversar = formatarRespostaWhatsApp(ia.resposta || "👋 Olá! Como posso ajudar?");
+                await sendMessage(from, respostaConversar);
                 break;
 
             default:

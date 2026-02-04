@@ -1,4 +1,4 @@
-const { getDataBrasilia, validarDadosRegistro } = require('../utils');
+const { getDataBrasilia, validarDadosRegistro, formatarRespostaWhatsApp } = require('../utils');
 const { sendMessage, sendButtonMessage } = require('../services/whatsapp');
 const { perguntarParaGroq } = require('../services/ai');
 const sheets = require('../services/sheets');
@@ -173,13 +173,19 @@ ${resumo}
 
 Pergunta: "${textoOriginal}"
 
-Responda de forma analítica, clara e formatada com Markdown.
-Use emojis para organizar (💰 📊 📈).
-Seja objetivo e dê insights úteis.
+REGRAS OBRIGATÓRIAS (a resposta vai para WhatsApp):
+1. SEJA OBJETIVO E CURTO - no máximo 8-10 linhas. Evite textos longos.
+2. Use \\n para quebra de linha (WhatsApp não interpreta Markdown).
+3. Formato ideal: um título, bullet points com • ou emojis, total no final.
+4. Exemplo de estrutura:
+"📊 *Resumo do mês*\\n\\n• Categoria X: R$ Y\\n• Categoria Z: R$ W\\n\\n💰 Total: R$ XXX"
+5. NÃO use ## ou ** excessivos. Use *só para destaque* em palavras-chave.
+6. Dê UM insight breve no final (1 linha), sem enrolação.
 `;
 
             const resposta = await perguntarParaGroq(promptAnalise);
-            await sendMessage(from, resposta);
+            const respostaFormatada = formatarRespostaWhatsApp(resposta);
+            await sendMessage(from, respostaFormatada);
         }
     } catch (error) {
         console.error('[CONSULTAR] Erro:', error);

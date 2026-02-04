@@ -239,6 +239,38 @@ function validarFormatoData(data) {
 }
 
 /**
+ * Formata resposta da IA para exibição no WhatsApp
+ * - Garante quebras de linha adequadas
+ * - Converte Markdown básico para formato WhatsApp
+ * - Limita tamanho para legibilidade
+ * @param {string} texto - Texto da IA
+ * @returns {string} Texto formatado
+ */
+function formatarRespostaWhatsApp(texto) {
+    if (!texto || typeof texto !== 'string') return texto;
+
+    let resultado = texto.trim();
+
+    // Insere quebra após "Posso:" ou similar (respostas de funções sem quebras)
+    resultado = resultado.replace(/(Posso|posso|Pode|pode|São|são):\s*/g, '$1:\n\n');
+
+    // Converte ## Título para *Título* com quebra
+    resultado = resultado.replace(/^##\s*(.+)$/gm, '*$1*');
+
+    // Garante que - ou • no início de linha tenham quebra antes
+    resultado = resultado.replace(/\n\s*[-•]\s/g, '\n• ');
+
+    // Múltiplas quebras em sequência -> no máximo 2
+    resultado = resultado.replace(/\n{3,}/g, '\n\n');
+
+    // Remove espaços extras no início/fim de linhas
+    resultado = resultado.split('\n').map(l => l.trim()).join('\n');
+
+    // Trunca se muito longo (limite WhatsApp ~4096, mas para legibilidade ~1200)
+    return truncarTexto(resultado, 1200);
+}
+
+/**
  * Trunca texto longo para evitar mensagens muito grandes
  * @param {string} texto - Texto a ser truncado
  * @param {number} maxLength - Tamanho máximo (default: 1000)
@@ -325,6 +357,7 @@ module.exports = {
     limparEConverterJSON,
     validarDadosRegistro,
     normalizarTexto,
+    formatarRespostaWhatsApp,
     formatarValorBRL,
     extrairValorPorExtenso,
     validarFormatoData,
