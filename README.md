@@ -208,9 +208,6 @@ Próximos passos que pretendo implementar:
 
 ## Autor
 
-**[Seu nome]**, estudante de Engenharia de Software.
-[LinkedIn](https://linkedin.com/in/seu-perfil) · [GitHub](https://github.com/seu-usuario)
+**Gustavo Anselmo**, estudante de Engenharia de Software.
+[LinkedIn]([https://linkedin.com/in/seu-perfil](https://www.linkedin.com/in/gustavo-anselmo-613779225/)) · [GitHub]([https://github.com/seu-usuario](https://github.com/Gustavo-Anselmo))
 
-## Licença
-
-Distribuído sob a licença ISC.
