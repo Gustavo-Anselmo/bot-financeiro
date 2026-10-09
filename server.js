@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const cron = require('node-cron');
 const { getDataBrasilia, limparEConverterJSON, formatarRespostaWhatsApp } = require('./src/utils');
@@ -15,10 +16,31 @@ const {
 } = require('./src/handlers/processadores');
 require('dotenv').config();
 
+// Falha cedo se faltar configuração obrigatória
+const VARIAVEIS_OBRIGATORIAS = ['APP_SECRET', 'MY_TOKEN', 'WHATSAPP_TOKEN', 'PHONE_NUMBER_ID', 'GROQ_API_KEY', 'SHEET_ID'];
+const faltando = VARIAVEIS_OBRIGATORIAS.filter(v => !process.env[v]);
+if (faltando.length > 0) {
+    console.error(`[CONFIG] Variáveis de ambiente ausentes: ${faltando.join(', ')}`);
+    process.exit(1);
+}
+
 const app = express();
-app.use(express.json());
+// Guarda o corpo bruto: a assinatura da Meta é calculada sobre ele
+app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf; } }));
 const PORT = process.env.PORT || 3000;
 const MY_TOKEN = process.env.MY_TOKEN;
+
+/**
+ * Confere se a requisição foi realmente enviada pela Meta (X-Hub-Signature-256)
+ */
+function assinaturaValida(req) {
+    const recebida = Buffer.from(req.get('x-hub-signature-256') || '');
+    const esperada = Buffer.from(
+        'sha256=' + crypto.createHmac('sha256', process.env.APP_SECRET)
+            .update(req.rawBody || '').digest('hex')
+    );
+    return recebida.length === esperada.length && crypto.timingSafeEqual(recebida, esperada);
+}
 
 // 🗂️ ARMAZENAMENTO TEMPORÁRIO DE REGISTROS PENDENTES
 const registrosPendentes = new Map();
@@ -76,6 +98,11 @@ app.get('/webhook', (req, res) => {
 
 // 📨 WEBHOOK - RECEBER MENSAGENS
 app.post('/webhook', async (req, res) => {
+    if (!assinaturaValida(req)) {
+        console.warn('[WEBHOOK] Assinatura inválida - requisição rejeitada');
+        return res.sendStatus(401);
+    }
+
     const body = req.body;
 
     if (!body.object || !body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
@@ -105,7 +132,7 @@ app.post('/webhook', async (req, res) => {
                 const nomeCategoria = idBotao.replace('CRIAR_', '');
                 await sendMessage(from, `🔄 Criando categoria *${nomeCategoria}*...`);
                 
-                const criou = await sheets.criarNovaCategoria(nomeCategoria);
+                const criou = await sheets.criarNovaCategoria(nomeCategoria, from);
                 
                 if (criou) {
                     await sendMessage(from, `✅ *Categoria ${nomeCategoria} criada!*`);
@@ -270,7 +297,7 @@ app.post('/webhook', async (req, res) => {
             }
 
             // ✅ CORREÇÃO: Busca categorias e trata corretamente o resultado
-            const categoriasResult = await sheets.getCategoriasPermitidas();
+            const categoriasResult = await sheets.getCategoriasPermitidas(from);
             
             // ✅ Converte para array se necessário e depois para string
             let categoriasTexto;
