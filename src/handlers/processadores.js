@@ -115,7 +115,11 @@ async function processarExclusao(ia, from) {
 
 async function processarCadastroFixo(ia, from) {
     try {
-        await sheets.cadastrarNovoFixo(ia.dados);
+        const ok = await sheets.cadastrarNovoFixo(ia.dados, from);
+        if (!ok) {
+            await sendMessage(from, "❌ Não consegui cadastrar o fixo. Tente novamente.");
+            return;
+        }
         await sendMessage(
             from,
             `📌 *Gasto Fixo Configurado*\n\n` +

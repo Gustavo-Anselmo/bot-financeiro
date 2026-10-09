@@ -7,6 +7,10 @@ require('dotenv').config();
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 
+// Modelos configuráveis via .env (a Groq descontinua modelos com frequência)
+const MODELO_TEXTO = process.env.GROQ_TEXT_MODEL || 'llama-3.3-70b-versatile';
+const MODELO_VISAO = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.8-27b';
+
 // 🧠 SYSTEM PROMPT V16.0 - MUITO MAIS INTELIGENTE E INTERPRETATIVO
 const SYSTEM_PROMPT = `Você é um Assistente Financeiro Inteligente integrado ao WhatsApp.
 
@@ -250,7 +254,7 @@ async function perguntarParaGroq(prompt, tentativa = 1) {
         const response = await axios.post(
             'https://api.groq.com/openai/v1/chat/completions',
             {
-                model: "llama-3.3-70b-versatile",
+                model: MODELO_TEXTO,
                 messages: [
                     { role: "system", content: SYSTEM_PROMPT },
                     { role: "user", content: prompt }
@@ -375,7 +379,7 @@ async function analisarImagemComVision(mediaId) {
         const response = await axios.post(
             'https://api.groq.com/openai/v1/chat/completions',
             {
-                model: "llama-3.2-11b-vision-preview",
+                model: MODELO_VISAO,
                 messages: [{
                     role: "user",
                     content: [

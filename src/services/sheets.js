@@ -138,7 +138,7 @@ async function inscreverUsuario(numero) {
             'Ativo': 'Sim',
             'Alertas_Meta': 'Não',
             'Data_Inscricao': getDataBrasilia()
-        });
+        }, { raw: true });
 
         return "🔔 *Lembretes Ativados!*\n\n" +
                "Você receberá notificações diárias às 09:40 " +
@@ -177,7 +177,7 @@ async function desinscreverUsuario(numero) {
         }
 
         userRow.set('Ativo', 'Não');
-        await userRow.save();
+        await userRow.save({ raw: true });
 
         return "🔕 *Lembretes Desativados!*\n\n" +
                "Você não receberá mais notificações diárias.\n\n" +
@@ -242,7 +242,7 @@ async function ativarAlertasMeta(numero) {
                 'Ativo': 'Não',
                 'Alertas_Meta': 'Sim',
                 'Data_Inscricao': getDataBrasilia()
-            });
+            }, { raw: true });
             return "✅ *Alertas de Meta Ativados!*\n\n" +
                    "Você será notificado quando seus gastos ultrapassarem os limites das categorias.\n\n" +
                    "💡 *Dica:* Use 'Desativar alertas' para pausar as notificações.";
@@ -255,7 +255,7 @@ async function ativarAlertasMeta(numero) {
         }
 
         userRow.set('Alertas_Meta', 'Sim');
-        await userRow.save();
+        await userRow.save({ raw: true });
 
         return "✅ *Alertas de Meta Ativados!*\n\n" +
                "Você será notificado quando seus gastos ultrapassarem os limites das categorias.\n\n" +
@@ -294,7 +294,7 @@ async function desativarAlertasMeta(numero) {
         }
 
         userRow.set('Alertas_Meta', 'Não');
-        await userRow.save();
+        await userRow.save({ raw: true });
 
         return "✅ *Alertas de Meta Desativados!*\n\n" +
                "Você não receberá mais notificações ao ultrapassar limites.\n\n" +
@@ -336,11 +336,12 @@ async function usuarioQuerAlertas(numero) {
 // ═══════════════════════════════════════════════════════
 
 /**
- * Cria uma nova categoria na aba Metas
+ * Cria uma nova categoria na aba Metas (por usuário)
  * @param {string} novaCategoria - Nome da categoria
+ * @param {string} numeroUsuario - Número do WhatsApp
  * @returns {Promise<boolean>}
  */
-async function criarNovaCategoria(novaCategoria) {
+async function criarNovaCategoria(novaCategoria, numeroUsuario) {
     try {
         const doc = await getDoc();
         let sheetMetas = doc.sheetsByTitle['Metas'];
@@ -348,13 +349,14 @@ async function criarNovaCategoria(novaCategoria) {
         if (!sheetMetas) {
             sheetMetas = await doc.addSheet({
                 title: 'Metas',
-                headerValues: ['Categoria', 'Limite', 'Cor']
+                headerValues: ['Numero', 'Categoria', 'Limite', 'Cor']
             });
         }
 
         const rows = await sheetMetas.getRows();
         const existe = rows.find(r =>
-            r.get('Categoria').toLowerCase() === novaCategoria.toLowerCase()
+            r.get('Numero') === numeroUsuario &&
+            (r.get('Categoria') || '').toLowerCase() === novaCategoria.toLowerCase()
         );
 
         if (existe) {
@@ -363,10 +365,11 @@ async function criarNovaCategoria(novaCategoria) {
         }
 
         await sheetMetas.addRow({
+            'Numero': numeroUsuario,
             'Categoria': novaCategoria,
             'Limite': '1000.00',
             'Cor': '#4A90E2'
-        });
+        }, { raw: true });
 
         console.log(`[SHEETS] Categoria "${novaCategoria}" criada com sucesso`);
         return true;
@@ -378,10 +381,11 @@ async function criarNovaCategoria(novaCategoria) {
 }
 
 /**
- * Retorna lista de categorias existentes
+ * Retorna lista de categorias existentes do usuário
+ * @param {string} numeroUsuario - Número do WhatsApp
  * @returns {Promise<string>} String com categorias separadas por vírgula
  */
-async function getCategoriasPermitidas() {
+async function getCategoriasPermitidas(numeroUsuario) {
     try {
         const doc = await getDoc();
         const sheetMetas = doc.sheetsByTitle['Metas'];
@@ -392,6 +396,7 @@ async function getCategoriasPermitidas() {
 
         const rows = await sheetMetas.getRows();
         const categorias = rows
+            .filter(row => row.get('Numero') === numeroUsuario)
             .map(row => row.get('Categoria'))
             .filter(c => c && c.trim() !== '');
 
@@ -427,7 +432,7 @@ async function adicionarNaPlanilha(dados, numeroUsuario) {
             'Item/Descrição': dados.item,
             'Valor': dados.valor,
             'Tipo': dados.tipo
-        });
+        }, { raw: true });
 
         console.log(`[SHEETS] Registro adicionado: ${dados.item} - R$ ${dados.valor}`);
         return true;
@@ -462,7 +467,8 @@ async function verificarMeta(categoria, valorNovo, numeroUsuario) {
 
         const metasRows = await sheetMetas.getRows();
         const metaRow = metasRows.find(row =>
-            row.get('Categoria').toLowerCase().trim() === categoria.toLowerCase().trim()
+            row.get('Numero') === numeroUsuario &&
+            (row.get('Categoria') || '').toLowerCase().trim() === categoria.toLowerCase().trim()
         );
 
         if (!metaRow) return "";
@@ -537,7 +543,7 @@ async function editarUltimoGasto(nomeItem, novoValor, numeroUsuario) {
 
         const valorAntigo = rowToEdit.get('Valor');
         rowToEdit.set('Valor', novoValor);
-        await rowToEdit.save();
+        await rowToEdit.save({ raw: true });
 
         console.log(`[SHEETS] Editado: ${rowToEdit.get('Item/Descrição')} - ${valorAntigo} → ${novoValor}`);
 
@@ -602,11 +608,12 @@ async function excluirGasto(nomeItem, numeroUsuario) {
 // ═══════════════════════════════════════════════════════
 
 /**
- * Cadastra novo gasto fixo recorrente
+ * Cadastra novo gasto fixo recorrente (por usuário)
  * @param {object} dados - {item, valor, categoria}
+ * @param {string} numeroUsuario - Número do WhatsApp
  * @returns {Promise<boolean>}
  */
-async function cadastrarNovoFixo(dados) {
+async function cadastrarNovoFixo(dados, numeroUsuario) {
     try {
         const doc = await getDoc();
         let sheetFixos = doc.sheetsByTitle['Fixos'];
@@ -614,16 +621,17 @@ async function cadastrarNovoFixo(dados) {
         if (!sheetFixos) {
             sheetFixos = await doc.addSheet({
                 title: 'Fixos',
-                headerValues: ['Item', 'Valor', 'Categoria', 'Ativo']
+                headerValues: ['Numero', 'Item', 'Valor', 'Categoria', 'Ativo']
             });
         }
 
         await sheetFixos.addRow({
+            'Numero': numeroUsuario,
             'Item': dados.item,
             'Valor': dados.valor,
             'Categoria': dados.categoria,
             'Ativo': 'Sim'
-        });
+        }, { raw: true });
 
         console.log(`[SHEETS] Fixo cadastrado: ${dados.item} - R$ ${dados.valor}`);
         return true;
@@ -650,7 +658,8 @@ async function lancarGastosFixos(numeroUsuario) {
         }
 
         const rowsFixos = await sheetFixos.getRows();
-        const fixosAtivos = rowsFixos.filter(r => r.get('Ativo') === 'Sim');
+        const fixosAtivos = rowsFixos.filter(r =>
+            r.get('Numero') === numeroUsuario && r.get('Ativo') === 'Sim');
 
         if (fixosAtivos.length === 0) {
             return "⚠️ *Lista Vazia*\n\nSua lista de gastos fixos está vazia.";
@@ -688,7 +697,7 @@ async function lancarGastosFixos(numeroUsuario) {
                 'Item/Descrição': item,
                 'Valor': valor,
                 'Tipo': 'Saída'
-            });
+            }, { raw: true });
 
             total += parseFloat(valor.replace('R$', '').replace(',', '.').trim());
             resumo += `▪️ ${item}: R$ ${valor}\n`;
